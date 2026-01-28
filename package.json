@@ -12,6 +12,9 @@
 	},
 	"license": "GPL-3.0-or-later",
 	"author": "James Prevett <jp@jamespre.dev>",
+	"bin": {
+		"eedu": "./dist/main.js"
+	},
 	"type": "module",
 	"scripts": {
 		"test": "echo \"Error: no test specified\" && exit 1"
@@ -26,6 +29,7 @@
 		"experimentalOperatorPosition": "start"
 	},
 	"dependencies": {
+		"@mherod/get-cookie": "^4.4.1",
 		"commander": "^14.0.2",
 		"zod": "^4.3.6"
 	},
