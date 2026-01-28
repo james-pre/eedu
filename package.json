@@ -1,0 +1,38 @@
+{
+	"name": "eedu",
+	"version": "0.0.1",
+	"description": "Make education about learning again, not the grade.",
+	"homepage": "https://github.com/james-pre/eedu#readme",
+	"bugs": {
+		"url": "https://github.com/james-pre/eedu/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/james-pre/eedu.git"
+	},
+	"license": "GPL-3.0-or-later",
+	"author": "James Prevett <jp@jamespre.dev>",
+	"type": "module",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"prettier": {
+		"singleQuote": true,
+		"useTabs": true,
+		"trailingComma": "es5",
+		"tabWidth": 4,
+		"printWidth": 140,
+		"arrowParens": "avoid",
+		"experimentalOperatorPosition": "start"
+	},
+	"dependencies": {
+		"commander": "^14.0.2",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@commander-js/extra-typings": "^14.0.0",
+		"@types/node": "^25.0.10",
+		"prettier": "^3.8.1",
+		"typescript": "^5.9.3"
+	}
+}
