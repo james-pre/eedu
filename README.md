@@ -19,7 +19,7 @@ To that end, it implements some features to (try) to make learning fun again:
 
 ### Automation
 
-Users are solely responsible for the consequence of automation.
+Users are solely responsible for the consequences of automation.
 Using automation when it isn't allowed may result in punishment for cheating.
 
 ### Notes for Platforms
