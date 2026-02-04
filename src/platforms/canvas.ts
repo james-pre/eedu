@@ -2,7 +2,7 @@ import { join } from 'node:path/posix';
 import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
 import { dataDir } from '../data.js';
-import { errorText, readJSON, writeJSON } from '../utils.js';
+import { readJSON, writeJSON } from '../utils.js';
 
 const dataPath = join(dataDir, 'canvas.json');
 

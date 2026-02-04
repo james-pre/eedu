@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline/promises';
 import { styleText } from 'node:util';
 import $pkg from '../package.json' with { type: 'json' };
 import * as canvas from './platforms/canvas.js';
+import * as zybooks from './platforms/zybooks.js';
 import { errorText, normalizeURL } from './utils.js';
 
 using rl = createInterface({
@@ -67,6 +68,8 @@ cli_discover
 			}
 		}
 	});
+
+cli_discover.command('zybooks').description('Discover books from ZyBooks').action(zybooks.discover);
 
 cli.command('grades');
 
