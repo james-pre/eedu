@@ -4,7 +4,7 @@
 
 `eedu`'s goal is be the most comprehensive way to make education more about learning and less worrying about grades.
 
-To that end, it implements some features to (try) to make learning fun again:
+To that end, it implements some features in an attempt to make learning fun again:
 
 - Manage what courses you are taking
 - Automation for as much as possible, [when allowed](#auto-disclaimer).
