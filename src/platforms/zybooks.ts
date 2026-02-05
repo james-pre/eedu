@@ -3,7 +3,6 @@ import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
 import { dataFrom } from '../data.js';
 import { onAdd, prompt } from '../discovery.js';
-import { debugMode } from '../config.js';
 
 export const ZybooksData = z.object({
 	token: z.string().optional(),
