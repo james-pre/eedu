@@ -3,6 +3,7 @@ import $pkg from '../../package.json' with { type: 'json' };
 import { courses, dataFrom, terms } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import { discover as discoverZybooks } from './zybooks.js';
+import { normalizeURL } from '../utils.js';
 
 export const CanvasData = z
 	.object({
@@ -39,13 +40,18 @@ export async function api(method: string, endpoint: string, body?: any, headers:
 }
 
 export async function discover(options: DiscoverOptions) {
+	if (!data.origin) {
+		const domain = await prompt('Enter the Canvas instance domain: ');
+		data.origin = normalizeURL(domain).origin;
+	}
+
 	if (!data.token) {
 		/**
 		 * @todo use OAuth2 because Canvas access tokens because according to the API docs:
 		 * > Note that asking any other user to manually generate a token and enter it into your application is a violation of Canvas' API Policy.
 		 * > Applications in use by multiple users MUST use OAuth to obtain tokens.
 		 */
-		const token = await prompt(`Enter your access token (from ${data.origin}/profile/settings#access_tokens_holder): `);
+		const token = await prompt(`Enter your access token from ${data.origin}/profile/settings#access_tokens_holder: `);
 		data.token = token.trim();
 	}
 
