@@ -90,18 +90,19 @@ cli_auto
 	.option('-f, --force', 'Force re-completion of already completed activities', false)
 	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
+	.option('--show-names', 'Show activity names', false)
 	.action(async (books, options) => {
 		for (const book of books) {
 			await zybooks.autoComplete(book, {
 				...options,
-				onComplete(chapter, section, resource, part) {
-					let text = `${styleText('green', 'Completing')} ${chapter.number}.${section.number}.${resource._number}`;
-					if (typeof part == 'number') text += ` (${part + 1}/${resource.parts})`;
+				onComplete(name, resource, part) {
+					let text = `${styleText('green', 'Completing')} ${name}`;
+					if (typeof part == 'number') text += ` part ${part + 1}/${resource.parts}`;
 					console.log(text);
 				},
-				onSkip(chapter, section, resource, reason, show) {
+				onSkip(name, resource, reason, show) {
 					if (!show && !debugMode) return;
-					let text = `${styleText(show ? 'yellow' : 'dim', 'Skipping')} ${chapter.number}.${section.number}.${resource._number}`;
+					let text = `${styleText(show ? 'yellow' : 'dim', 'Skipping')} ${name}`;
 					if (reason) text += `: ${reason}`;
 					console.log(text);
 				},

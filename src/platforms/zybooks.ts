@@ -154,14 +154,21 @@ export async function getBuildKey() {
 	return config.APP.BUILDKEY;
 }
 
+export function resourceName(chapter: Chapter, section: ChapterSection, resource: ContentResource, names: boolean): string {
+	let text = `${chapter.number}.${section.number}.${resource._number}`;
+	if (names) text += ` [${chapter.title} > ${section.title}${resource.caption ? ' > ' + resource.caption : ''}]`;
+	return text;
+}
+
 export interface AutoOptions {
 	chapter?: number;
 	section?: number;
 	delay?: number;
 	dryRun: boolean;
 	force: boolean;
-	onSkip?(chapter: Chapter, section: ChapterSection, resource: ContentResource, reason: string, show?: boolean): void;
-	onComplete?(chapter: Chapter, section: ChapterSection, resource: ContentResource, part?: number): void;
+	showNames: boolean;
+	onSkip?(name: string, resource: ContentResource, reason: string, show?: boolean): void;
+	onComplete?(name: string, resource: ContentResource, part?: number): void;
 }
 
 let buildKey: string;
@@ -223,12 +230,13 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 
 			for (const [i, resource] of content_resources.entries()) {
 				resource._number = i + 1;
+				const name = resourceName(chapter, section, resource, opts.showNames);
 				if (data.completed_resources.includes(resource.id) && !opts.force) {
-					opts.onSkip?.(chapter, section, resource, 'already completed');
+					opts.onSkip?.(name, resource, 'already completed');
 					continue;
 				}
 				if (resource.activity_type == 'lab') {
-					opts.onSkip?.(chapter, section, resource, 'cannot auto-complete labs', true);
+					opts.onSkip?.(name, resource, 'cannot auto-complete labs', true);
 					continue;
 				}
 				switch (resource.type) {
@@ -239,7 +247,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 						for (const [part, question] of resource.payload.questions.entries()) {
 							const answer = question.choices.find(c => c.correct)!.label[0].text;
 							const body = createBody(zybook_code, resource.id, part, { answer });
-							opts.onComplete?.(chapter, section, resource, part);
+							opts.onComplete?.(name, resource, part);
 							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
 							await delay();
 						}
@@ -258,7 +266,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 									isTrusted: { isTrusted: true },
 								},
 							});
-							opts.onComplete?.(chapter, section, resource, part);
+							opts.onComplete?.(name, resource, part);
 							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
 							await delay();
 						}
@@ -267,7 +275,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 					case 'custom':
 						for (let part = 0; part < resource.parts; part++) {
 							const body = createBody(zybook_code, resource.id, part);
-							opts.onComplete?.(chapter, section, resource, part);
+							opts.onComplete?.(name, resource, part);
 							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
 							await delay();
 						}
