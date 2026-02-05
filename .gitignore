@@ -1,6 +1,7 @@
 .*
 !.gitignore
 !.vscode
+!.github
 tmp
 dist
 node_modules
