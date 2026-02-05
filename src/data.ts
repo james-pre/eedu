@@ -8,7 +8,6 @@ export const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local
 mkdirSync(dataDir, { recursive: true });
 
 export type DataFrom<S extends z.ZodType> = z.infer<S> & {
-	$schema: S;
 	write(): void;
 };
 
@@ -23,7 +22,6 @@ export function dataFrom<const S extends z.ZodObject | z.ZodArray>(path: string,
 	}
 
 	return Object.assign(data, {
-		$schema: schema,
 		write() {
 			writeJSON(path, data);
 		},
