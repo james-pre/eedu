@@ -8,11 +8,25 @@ import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as zybooks from './platforms/zybooks.js';
 import { errorText } from './utils.js';
+import { stringbool } from 'zod';
+import { debugMode } from './config.js';
 
 using rl = createInterface({
 	input: process.stdin,
 	output: process.stdout,
 });
+
+async function rlConfirm(question: string = 'Is this ok'): Promise<void> {
+	const abort = () => {
+		console.error(styleText('red', 'Aborted.'));
+		process.exit(1);
+	};
+
+	const { data, error } = stringbool()
+		.default(false)
+		.safeParse(await rl.question(question + ' [y/N]: ').catch(abort));
+	if (error || !data) abort();
+}
 
 const cli = program.name('eedu').version($pkg.version).description($pkg.description);
 
@@ -59,10 +73,46 @@ cli_discover
 
 cli_discover.command('zybooks').description('Discover books from ZyBooks').action(zybooks.discover);
 
+const cli_auto = cli
+	.command('autocomplete')
+	.alias('auto')
+	.description('Automatically complete actions')
+	.option('-y, --no-confirm', 'Do not ask for confirmation')
+	.hook('preAction', async cmd => {
+		if (cmd.opts().confirm) await rlConfirm('Do you accept responsibility for any consequences resulting from this automation');
+	});
+
+cli_auto
+	.command('zybooks')
+	.description('Auto-complete ZyBook activities')
+	.argument('[books...]', 'ZyBook book codes to auto-complete', zybooks.data.books)
+	.option('--dry-run', 'Do not send completion requests', false)
+	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
+	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
+	.action(async (books, options) => {
+		for (const book of books) {
+			await zybooks.autoComplete(book, {
+				...options,
+				onComplete(chapter, section, resource, part) {
+					let text = `${styleText('green', 'Completing')} ${chapter.number}.${section.number}.${resource._number}`;
+					if (typeof part == 'number') text += ` (${part + 1}/${resource.parts})`;
+					console.log(text);
+				},
+				onSkip(chapter, section, resource, reason, show) {
+					if (!show && !debugMode) return;
+					let text = `${styleText(show ? 'yellow' : 'dim', 'Skipping')} ${chapter.number}.${section.number}.${resource._number}`;
+					if (reason) text += `: ${reason}`;
+					console.log(text);
+				},
+			});
+		}
+	});
+
 cli.command('grades');
 
 process.on('uncaughtException', err => {
 	console.error(styleText('red', 'Error:'), errorText(err));
+	if (debugMode && err instanceof Error && err.stack) console.error(styleText('dim', err.stack.split('\n').slice(1).join('\n')));
 });
 
 await cli.parseAsync();

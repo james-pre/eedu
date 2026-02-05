@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
 import { dataFrom } from '../data.js';
 import { onAdd, prompt } from '../discovery.js';
-import { createHash } from 'node:crypto';
+import { debugMode } from '../config.js';
 
 export const ZybooksData = z.object({
 	token: z.string().optional(),
@@ -15,7 +16,7 @@ export interface ZybooksData extends z.infer<typeof ZybooksData> {}
 
 export let data = dataFrom('zybooks.json', ZybooksData, { books: [], completed_resources: [] });
 
-export async function api(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<any> {
+export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
 	const url = new URL(endpoint, 'https://zyserver.zybooks.com/v1/');
 	const response = await fetch(url, {
 		method,
@@ -40,15 +41,83 @@ export async function api(method: string, endpoint: string, body?: any, headers:
 	return json;
 }
 
-export async function discover() {
-	if (!data.token) {
-		const token = await prompt('Enter your session token: ');
-		data.token = token.trim();
-	}
+export interface Chapter {
+	sections: ChapterSection[];
+	title: string;
+	number: number;
+}
 
+export interface ChapterSection {
+	title: string;
+	short_title: string;
+	canonical_section_id: number;
+	canonical_zybook_id: number;
+	canonical_chapter_number: number;
+	canonical_section_number: number;
+	subject_id: number;
+	subject_label: string;
+	version: string;
+	release_id: number;
+	optional: boolean;
+	hidden: boolean;
+	type: string;
+	subject_name: string;
+	number: number;
+	new: boolean;
+}
+
+export interface Section extends ChapterSection {
+	content_resources: ContentResource[];
+}
+
+export interface ContentResource {
+	id: number;
+	caption?: string;
+	payload: Payload;
+	instructions?: any[];
+	parts: number;
+	activity_type?: string;
+	type: string;
+	release_id: number;
+	optional: boolean;
+	_number: number;
+}
+
+export interface Payload {
+	subject: string;
+	image_ids: string[];
+	tool?: string;
+	size: any;
+	questions: Question[];
+}
+
+export interface Question {
+	text: any[];
+	answers?: string[];
+	obey_case?: boolean;
+	preferred?: string;
+	obey_quote?: boolean;
+	obey_space?: boolean;
+	text_after: any;
+	explanation?: any[];
+	obey_linear?: boolean;
+	render_html?: boolean;
+	text_before: any;
+	choices: {
+		label: { text: string }[];
+		correct: boolean;
+	}[];
+}
+
+export async function discover() {
 	if (!data.user_id) {
 		const user_id = await prompt('Enter your user ID: ');
 		data.user_id = z.coerce.number().int().parse(user_id.trim());
+	}
+
+	if (!data.token) {
+		const token = await prompt('Enter your session token: ');
+		data.token = token.trim();
 	}
 
 	data.write();
@@ -67,6 +136,9 @@ export async function discover() {
 	data.write();
 }
 
+// Regex to match: <meta name="zybooks-web/config/environment" content="...">
+const buildConfigRegex = /<meta\b[^>]*\bname="zybooks-web\/config\/environment"[^>]*\bcontent=(["'])(?<content>(?:\\.|(?!\1).)*)\1/i;
+
 export async function getBuildKey() {
 	const res = await fetch('https://learn.zybooks.com', {
 		headers: {
@@ -76,11 +148,10 @@ export async function getBuildKey() {
 	});
 	const content = await res.text();
 
-	// Regex to match: <meta name="zybooks-web/config/environment" content="...">
-	const match = content.match(/<meta\s+name=["']zybooks-web\/config\/environment["']\s+content=["']([^"']+)["']/);
+	const match = content.match(buildConfigRegex);
 	if (!match) throw new Error('Could not find build key');
 
-	const config = JSON.parse(decodeURIComponent(match[1]));
+	const config = JSON.parse(decodeURIComponent(match.groups!.content));
 	return config.APP.BUILDKEY;
 }
 
@@ -88,11 +159,14 @@ export interface AutoOptions {
 	chapter?: number;
 	section?: number;
 	delay?: number;
+	dryRun?: boolean;
+	onSkip?(chapter: Chapter, section: ChapterSection, resource: ContentResource, reason: string, show?: boolean): void;
+	onComplete?(chapter: Chapter, section: ChapterSection, resource: ContentResource, part?: number): void;
 }
 
 let buildKey: string;
 
-function createBody(zybook_code: string, resourceId: string, part: number, extra?: object): object {
+function createBody(zybook_code: string, resourceId: number, part: number, extra?: any): object {
 	const timestamp = new Date().toISOString();
 	const md5 = createHash('md5');
 	const raw = `content_resource/${resourceId}/activity${timestamp}${data.token}${resourceId}${part}true${buildKey}`;
@@ -102,7 +176,11 @@ function createBody(zybook_code: string, resourceId: string, part: number, extra
 	return {
 		part,
 		complete: true,
-		metadata: { isTrusted: true, computerTime: timestamp },
+		metadata: {
+			isTrusted: true,
+			computerTime: timestamp,
+			...(extra?.metadata || {}),
+		},
 		zybook_code,
 		auth_token: data.token,
 		timestamp,
@@ -125,7 +203,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 
 	const {
 		zybooks: [{ chapters }],
-	} = await api('GET', `zybooks?zybooks=["${zybook_code}"]`);
+	} = await api<{ zybooks: { chapters: Chapter[] }[] }>('GET', `zybooks?zybooks=["${zybook_code}"]`);
 
 	for (const chapter of chapters) {
 		if (typeof opts.chapter == 'number' && chapter.number != opts.chapter) continue;
@@ -135,29 +213,71 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 
 			const {
 				section: { content_resources },
-			} = await api('GET', `zybook/${zybook_code}/chapter/${chapter.number}/section/${section.number}`).catch(() =>
-				api('GET', `zybook/${zybook_code}/chapter/${chapter.number}/section/${section.canonical_section_number}`)
+			} = await api<{ section: Section }>('GET', `zybook/${zybook_code}/chapter/${chapter.number}/section/${section.number}`).catch(
+				() =>
+					api<{ section: Section }>(
+						'GET',
+						`zybook/${zybook_code}/chapter/${chapter.number}/section/${section.canonical_section_number}`
+					)
 			);
 
-			for (const resource of content_resources) {
-				if (data.completed_resources.includes(resource.id)) continue;
+			for (const [i, resource] of content_resources.entries()) {
+				resource._number = i + 1;
+				if (data.completed_resources.includes(resource.id)) {
+					opts.onSkip?.(chapter, section, resource, 'already completed');
+					continue;
+				}
+				if (resource.activity_type == 'lab') {
+					opts.onSkip?.(chapter, section, resource, 'cannot auto-complete labs', true);
+					continue;
+				}
 				switch (resource.type) {
-					case 'html':
 					case 'container':
+					case 'html':
 						break;
 					case 'multiple_choice':
 						for (const [part, question] of resource.payload.questions.entries()) {
-							const answer = question.choices.find((c: any) => c.correct).label[0].text;
+							const answer = question.choices.find(c => c.correct)!.label[0].text;
 							const body = createBody(zybook_code, resource.id, part, { answer });
-							await api('POST', `content_resource/${resource.id}/activity`, body);
+							opts.onComplete?.(chapter, section, resource, part);
+							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
 							await delay();
 						}
 						break;
 					case 'short_answer':
-
+						for (const [part, question] of resource.payload.questions.entries()) {
+							const answer = question.preferred;
+							const body = createBody(zybook_code, resource.id, part, {
+								answer,
+								metadata: {
+									caseDiffers: false,
+									quoteDiffers: false,
+									stringDiffHighlight: null,
+									type: 'correct',
+									whitespaceDiffers: false,
+									isTrusted: { isTrusted: true },
+								},
+							});
+							opts.onComplete?.(chapter, section, resource, part);
+							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
+							await delay();
+						}
+						break;
+					default:
 					case 'custom':
+						for (let part = 0; part < resource.parts; part++) {
+							const body = createBody(zybook_code, resource.id, part);
+							opts.onComplete?.(chapter, section, resource, part);
+							if (!opts.dryRun) await api('POST', `content_resource/${resource.id}/activity`, body);
+							await delay();
+						}
+						break;
 				}
+				data.completed_resources.push(resource.id);
+				data.write();
 			}
 		}
 	}
+
+	data.write();
 }
