@@ -15,6 +15,10 @@
 	"bin": {
 		"eedu": "./dist/main.js"
 	},
+	"files": [
+		"dist",
+		"LICENSE.md"
+	],
 	"type": "module",
 	"scripts": {
 		"format:check": "prettier --check .",
