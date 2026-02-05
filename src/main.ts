@@ -87,6 +87,7 @@ cli_auto
 	.description('Auto-complete ZyBook activities')
 	.argument('[books...]', 'ZyBook book codes to auto-complete', zybooks.data.books)
 	.option('--dry-run', 'Do not send completion requests', false)
+	.option('-f, --force', 'Force re-completion of already completed activities', false)
 	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
 	.action(async (books, options) => {

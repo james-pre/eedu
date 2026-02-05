@@ -158,7 +158,8 @@ export interface AutoOptions {
 	chapter?: number;
 	section?: number;
 	delay?: number;
-	dryRun?: boolean;
+	dryRun: boolean;
+	force: boolean;
 	onSkip?(chapter: Chapter, section: ChapterSection, resource: ContentResource, reason: string, show?: boolean): void;
 	onComplete?(chapter: Chapter, section: ChapterSection, resource: ContentResource, part?: number): void;
 }
@@ -222,7 +223,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 
 			for (const [i, resource] of content_resources.entries()) {
 				resource._number = i + 1;
-				if (data.completed_resources.includes(resource.id)) {
+				if (data.completed_resources.includes(resource.id) && !opts.force) {
 					opts.onSkip?.(chapter, section, resource, 'already completed');
 					continue;
 				}
@@ -272,7 +273,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 						}
 						break;
 				}
-				data.completed_resources.push(resource.id);
+				if (!data.completed_resources.includes(resource.id)) data.completed_resources.push(resource.id);
 				data.write();
 			}
 		}
