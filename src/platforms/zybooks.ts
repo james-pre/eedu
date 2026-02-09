@@ -121,9 +121,17 @@ export async function discover() {
 
 	data.write();
 
-	const {
-		items: { zybooks },
-	} = await api('GET', `user/${data.user_id}/items?items=["zybooks"]`);
+	let zybooks;
+
+	try {
+		const res = await api('GET', `user/${data.user_id}/items?items=["zybooks"]`);
+		zybooks = res.items.zybooks;
+	} catch (e) {
+		if (!(e instanceof Error) || e.message != 'Auth token is expired.') throw e;
+		delete data.token;
+		data.write();
+		return await discover();
+	}
 
 	for (const book of zybooks) {
 		if (book.autosubscribe || data.books.includes(book.zybook_code)) continue;
