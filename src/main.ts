@@ -48,6 +48,17 @@ cli_courses
 		}
 	});
 
+cli_courses
+	.command('add')
+	.description('Add a course')
+	.argument('<id>', 'Course ID')
+	.argument('<name>', 'Course name')
+	.argument('<term>', 'Course term')
+	.action(async (id, name, term, options) => {
+		courses.push({ id, name, term });
+		courses.write();
+	});
+
 const cli_discover = cli.command('discover').description('Discover accounts, courses, etc.');
 
 setHandlers({
