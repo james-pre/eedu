@@ -4,6 +4,7 @@ import { courses, dataFrom, terms } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { normalizeURL } from '../utils.js';
+import type * as types from './canvas.types.js';
 
 export const CanvasData = z
 	.object({
@@ -16,7 +17,7 @@ export interface CanvasData extends z.infer<typeof CanvasData> {}
 
 export let data = dataFrom('canvas.json', CanvasData, {});
 
-export async function api(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<any> {
+export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
 	const url = new URL(endpoint, data.origin + '/api/v1/');
 	const response = await fetch(url, {
 		method,
@@ -57,7 +58,7 @@ export async function discover(options: DiscoverOptions) {
 
 	data.write();
 
-	for (const course of await api('GET', 'courses?include[]=term')) {
+	for (const course of await api<types.Course[]>('GET', 'courses?include[]=term')) {
 		const existing_term = terms.find(t => t.canvas_id == course.term.id);
 
 		const term_id = course.term.name.replace(/\s+/g, '_').toLowerCase();
@@ -87,14 +88,14 @@ export async function discover(options: DiscoverOptions) {
 
 		if (!options.recursive) continue;
 
-		const modules = await api('GET', `courses/${course.id}/modules?include[]=items`);
+		const modules = await api<types.Module[]>('GET', `courses/${course.id}/modules?include[]=items`);
 
 		for (const module of modules) {
-			module.items ||= await api('GET', module.items);
+			module.items ||= await api<types.ModuleItem[]>('GET', module.items_url);
 			for (const item of module.items) {
 				if (item.type != 'ExternalTool') continue;
 
-				const { hostname } = new URL(item.external_url);
+				const { hostname } = new URL(item.external_url!);
 				if (hostname.endsWith('.zybooks.com')) {
 					console.log('\tZyBook:', module.name, '->', item.title);
 					await discoverZybooks();
