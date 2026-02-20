@@ -89,6 +89,37 @@ export interface GradingStandard {
 	grading_scheme: GradingSchemeEntry[];
 }
 
+export interface SubmissionVersion {
+	assignment_id: number;
+	assignment_name: string;
+	body: string;
+	current_grade: string;
+	current_graded_at: string;
+	current_grader: string;
+	grade_matches_current_submission: boolean;
+	graded_at: string;
+	grader: string;
+	grader_id: number;
+	id: number;
+	new_grade: string;
+	new_graded_at: string;
+	new_grader: string;
+	previous_grade: string;
+	previous_graded_at: string;
+	previous_grader: string;
+	score: number;
+	user_name: string;
+	submission_type: string;
+	url: string;
+	user_id: number;
+	workflow_state: string;
+}
+
+export interface SubmissionHistory {
+	submission_id: number;
+	versions: SubmissionVersion[];
+}
+
 export interface GradingPeriod {
 	id: number;
 	title: string;
@@ -182,6 +213,25 @@ export interface Enrollment {
 	current_period_unposted_final_grade: string;
 }
 
+export interface AssignmentGroupGrade {
+	id: number;
+	global_id: number;
+	score: number;
+	possible: number;
+	weight: number;
+	grade: number;
+	dropped: Record<string, never>[];
+}
+export interface GradeGroup {
+	submission_id: AssignmentGroupGrade;
+}
+export interface Grades {
+	current: Grade;
+	current_groups: GradeGroup;
+	final: Grade;
+	final_groups: GradeGroup;
+}
+
 export interface User {
 	id: number;
 	name: string;
@@ -202,4 +252,169 @@ export interface User {
 	time_zone: string;
 	bio: string;
 	pronouns: string;
+}
+
+export interface Submission {
+	id: number;
+	student_entered_score: string;
+}
+
+export interface AssignmentDate {
+	id: number;
+	base: boolean;
+	title: string;
+	due_at: string;
+	unlock_at: string;
+	lock_at: string;
+}
+
+export interface NeedsGradingCount {
+	section_id: string;
+	needs_grading_count: number;
+}
+
+export interface Assignment {
+	id: number;
+	name: string;
+	description: string;
+	created_at: string;
+	updated_at: string;
+	due_at: string;
+	lock_at: string;
+	unlock_at: string;
+	has_overrides: boolean;
+	all_dates: AssignmentDate[];
+	course_id: number;
+	html_url: string;
+	submissions_download_url: string;
+	assignment_group_id: number;
+	due_date_required: boolean;
+	allowed_extensions: string[];
+	max_name_length: number;
+	turnitin_enabled: boolean;
+	vericite_enabled: boolean;
+	turnitin_settings: unknown;
+	grade_group_students_individually: boolean;
+	external_tool_tag_attributes: unknown;
+	peer_reviews: boolean;
+	automatic_peer_reviews: boolean;
+	peer_review_count: number;
+	peer_reviews_assign_at: string;
+	intra_group_peer_reviews: boolean;
+	group_category_id: number;
+	needs_grading_count: number;
+	needs_grading_count_by_section: NeedsGradingCount[];
+	position: number;
+	post_to_sis: boolean;
+	integration_id: string;
+	integration_data: Record<string, never>;
+	points_possible: number;
+	submission_types: (
+		| 'discussion_topic'
+		| 'online_quiz'
+		| 'on_paper'
+		| 'not_graded'
+		| 'none'
+		| 'external_tool'
+		| 'online_text_entry'
+		| 'online_url'
+		| 'online_upload'
+		| 'media_recording'
+		| 'student_annotation'
+	)[];
+	has_submitted_submissions: boolean;
+	grading_type: 'pass_fail' | 'percent' | 'letter_grade' | 'gpa_scale' | 'points';
+	grading_standard_id: number;
+	published: boolean;
+	unpublishable: boolean;
+	only_visible_to_overrides: boolean;
+	locked_for_user: boolean;
+	lock_info: LockInfo;
+	lock_explanation: string;
+	quiz_id: number;
+	anonymous_submissions: boolean;
+	discussion_topic: unknown;
+	freeze_on_copy: boolean;
+	frozen: boolean;
+	frozen_attributes: string[];
+	submission: Submission;
+	use_rubric_for_grading: boolean;
+	rubric_settings: Record<string, never>;
+	rubric: unknown[];
+	assignment_visibility: number[];
+	overrides: AssignmentOverride[];
+	omit_from_final_grade: boolean;
+	hide_in_gradebook: boolean;
+	moderated_grading: boolean;
+	grader_count: number;
+	final_grader_id: number;
+	grader_comments_visible_to_graders: boolean;
+	graders_anonymous_to_graders: boolean;
+	grader_names_visible_to_final_grader: boolean;
+	anonymous_grading: boolean;
+	allowed_attempts: number;
+	post_manually: boolean;
+	score_statistics: ScoreStatistic;
+	can_submit: boolean;
+	ab_guid: string[];
+	annotatable_attachment_id: number;
+	anonymize_students: boolean;
+	require_lockdown_browser: boolean;
+	important_dates: boolean;
+	muted: boolean;
+	anonymous_peer_reviews: boolean;
+	anonymous_instructor_annotations: boolean;
+	graded_submissions_exist: boolean;
+	is_quiz_assignment: boolean;
+	in_closed_grading_period: boolean;
+	can_duplicate: boolean;
+	original_course_id: number;
+	original_assignment_id: number;
+	original_lti_resource_link_id: number;
+	original_assignment_name: string;
+	original_quiz_id: number;
+	workflow_state: string;
+}
+
+export interface ScoreStatistic {
+	min: number;
+	max: number;
+	mean: number;
+	upper_q: number;
+	median: number;
+	lower_q: number;
+}
+
+export interface GradingRules {
+	drop_lowest: number;
+	drop_highest: number;
+	never_drop: number[];
+}
+export interface AssignmentGroup {
+	id: number;
+	name: string;
+	position: number;
+	group_weight: number;
+	sis_source_id: string;
+	integration_data: Record<string, never>;
+	assignments: number[];
+	rules: GradingRules;
+}
+export interface AssignmentOverride {
+	id: number;
+	assignment_id: number;
+	quiz_id: number;
+	context_module_id: number;
+	discussion_topic_id: number;
+	wiki_page_id: number;
+	attachment_id: number;
+	student_ids: number[];
+	group_id: number;
+	course_section_id: number;
+	title: string;
+	due_at: string;
+	all_day: boolean;
+	all_day_date: string;
+	unlock_at: string;
+	lock_at: string;
 }

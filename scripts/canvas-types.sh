@@ -13,3 +13,4 @@ cd canvas-lms
 bundle install
 bundle exec rake doc:openapi
 npx openapi-typescript public/doc/openapi/canvas.openapi.yaml -o "$root/lib/canvas.d.ts"
+perl -0777 -pi -e 's{^\s*/\*.*?\*/}{}gms' "$root/lib/canvas.d.ts"
