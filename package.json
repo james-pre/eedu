@@ -35,6 +35,7 @@
 	},
 	"dependencies": {
 		"commander": "^14.0.2",
+		"ioium": "^0.1.0",
 		"zod": "^4.3.6"
 	},
 	"devDependencies": {

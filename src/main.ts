@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { program } from 'commander';
+import { errorText } from 'ioium';
 import { createInterface } from 'node:readline/promises';
 import { styleText } from 'node:util';
+import { stringbool } from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
+import { debugMode } from './config.js';
 import { courses } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as zybooks from './platforms/zybooks.js';
-import { errorText } from './utils.js';
-import { stringbool } from 'zod';
-import { debugMode } from './config.js';
+import * as grades from './grades.js';
 
 using rl = createInterface({
 	input: process.stdin,
@@ -121,7 +122,23 @@ cli_auto
 		}
 	});
 
-cli.command('grades');
+const cli_grades = cli.command('grades').description('Manage grades');
+
+cli_grades
+	.command('show')
+	.description('Show grades')
+	.option('-a, --all-terms', 'Show grades for all terms, not just the active ones')
+	.argument('[course]', 'Course ID or name to show grades for, supports partial matches and is case insensitive')
+	.action(course => {
+		// @todo
+	});
+
+cli_grades
+	.command('pull')
+	.description('Fetch grades from discovered platforms')
+	.action(async () => {
+		// @todo
+	});
 
 process.on('uncaughtException', err => {
 	console.error(styleText('red', 'Error:'), errorText(err));

@@ -1,8 +1,8 @@
+import { readJSON, writeJSON } from 'ioium/node';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
-import { readJSON, writeJSON } from './utils.js';
 
 export const dataDir = join(process.env.XDG_DATA_HOME || join(homedir(), '.local/share'), 'eedu');
 mkdirSync(dataDir, { recursive: true });
