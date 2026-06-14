@@ -127,7 +127,11 @@ export async function discover() {
 		const res = await api('GET', `user/${data.user_id}/items?items=["zybooks"]`);
 		zybooks = res.items.zybooks;
 	} catch (e) {
-		if (!(e instanceof Error) || e.message != 'Auth token is expired.') throw e;
+		if (
+			!(e instanceof Error)
+			|| (e.message != 'Auth token is expired.' && e.message != 'Your session has expired, please refresh the page.')
+		)
+			throw e;
 		delete data.token;
 		data.write();
 		return await discover();
