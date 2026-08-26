@@ -1,4 +1,4 @@
-export type Platform = 'canvas' | 'zybooks';
+export type Platform = 'canvas' | 'zybooks' | 'qemu';
 
 export interface DiscoverHandlers {
 	select(question: string, choices: string[], defaultValue?: string): Promise<string> | string;

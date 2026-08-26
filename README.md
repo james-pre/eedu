@@ -34,7 +34,7 @@ All company, product and service names used in this software are for identificat
 Use of these names, logos, and brands does not imply endorsement.
 Unless explicitly stated otherwise, the developer of `eedu` is not affiliated with, sponsored by, or endorsed by any of the platforms.
 
-#### Digital Millennium Copyright Act (DMCA) Defense and Policy
+#### Digital Millennium Copyright Act (DMCA) Policy
 
 This software is designed to facilitate personal data management and interoperability, consistent with the rights reserved under applicable law including 17 U.S.C. § 1201(f) regarding reverse engineering for interoperability.
 
