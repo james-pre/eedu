@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { program } from 'commander';
-import { errorText } from 'ioium';
+import * as io from 'ioium/node';
 import { createInterface } from 'node:readline/promises';
 import { styleText } from 'node:util';
-import { stringbool } from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import { debugMode } from './config.js';
 import { courses } from './data.js';
@@ -11,23 +10,6 @@ import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as zybooks from './platforms/zybooks.js';
 import * as grades from './grades.js';
-
-using rl = createInterface({
-	input: process.stdin,
-	output: process.stdout,
-});
-
-async function rlConfirm(question: string = 'Is this ok'): Promise<void> {
-	const abort = () => {
-		console.error(styleText('red', 'Aborted.'));
-		process.exit(1);
-	};
-
-	const { data, error } = stringbool()
-		.default(false)
-		.safeParse(await rl.question(question + ' [y/N]: ').catch(abort));
-	if (error || !data) abort();
-}
 
 const cli = program.name('eedu').version($pkg.version).description($pkg.description);
 
@@ -65,10 +47,12 @@ const cli_discover = cli.command('discover').description('Discover accounts, cou
 setHandlers({
 	async select(question: string, choices: string[], defaultValue?: string): Promise<string> {
 		const maybeUnderline = (choice: string) => (choice == defaultValue ? styleText('underline', choice) : choice);
+		using rl = io.getReadline();
 		return await rl.question(`${question} [${choices.map(maybeUnderline)}]: `);
 	},
 	async prompt(question: string, defaultValue: string = ''): Promise<string> {
 		if (defaultValue) question += ` [${defaultValue}]`;
+		using rl = io.getReadline();
 		const value = await rl.question(question);
 		return value || defaultValue;
 	},
@@ -91,7 +75,7 @@ const cli_auto = cli
 	.description('Automatically complete actions')
 	.option('-y, --no-confirm', 'Do not ask for confirmation')
 	.hook('preAction', async cmd => {
-		if (cmd.opts().confirm) await rlConfirm('Do you accept responsibility for any consequences resulting from this automation');
+		if (cmd.opts().confirm) await io.assertYes('Do you accept responsibility for any consequences resulting from this automation');
 	});
 
 cli_auto
@@ -141,7 +125,7 @@ cli_grades
 	});
 
 process.on('uncaughtException', err => {
-	console.error(styleText('red', 'Error:'), errorText(err));
+	console.error(styleText('red', 'Error:'), io.errorText(err));
 	if (debugMode && err instanceof Error && err.stack) console.error(styleText('dim', err.stack.split('\n').slice(1).join('\n')));
 });
 
