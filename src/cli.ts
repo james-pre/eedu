@@ -15,7 +15,7 @@ const cli = new Command('eedu').version($pkg.version).description($pkg.descripti
 
 export default cli;
 
-const cli_courses = cli.command('courses').description('Manage courses');
+const cli_courses = cli.command('courses').description('Manage courses').option('--debug', 'Enable debug mode', false);
 
 cli_courses
 	.command('list')
@@ -127,12 +127,9 @@ cli_auto
 			onResume(count, out) {
 				console.log(`resuming: ${count} question(s) already in ${basename(out)}`);
 			},
-			onAnswer(line) {
-				if (!options.out) console.log(line);
-				else if (debugMode) console.log(styleText('dim', line));
-			},
+			onAnswer: console.log,
 			onPage(page, added, total) {
-				console.log(`page ${page}: ${styleText('green', added.toString())} new answer(s) (total ${total})`);
+				console.log(styleText('dim', `page ${page}: ${added} new answer(s) (total ${total})`));
 			},
 			onError(page, error) {
 				io.warn(`claude failed on page ${page}: ${error}`);

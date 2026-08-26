@@ -1,9 +1,11 @@
 import * as io from 'ioium/node';
 import sharp from 'sharp';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
+import { debugMode } from '../config.js';
 import { dataDir, dataFrom } from '../data.js';
 import { onAdd, prompt, select } from '../discovery.js';
 
@@ -33,10 +35,10 @@ export const QemuData = z.object({
 			 * That does not depend on focus, but needs the pointer to already be over the content
 			 * and `qemu-monitor-command` to be allowed.
 			 */
-			method: z.enum(['key', 'wheel']).default('key'),
+			method: z.enum(['key', 'wheel']).default('wheel'),
 			direction: z.enum(['down', 'up']).default('down'),
 			/** Scroll events sent per page */
-			count: z.int().positive().default(1),
+			count: z.int().positive().default(5),
 			/** Milliseconds between scroll events */
 			delay: z.int().nonnegative().default(150),
 		})
@@ -52,9 +54,27 @@ export let data = dataFrom('qemu.json', QemuData, QemuData.parse({}));
 /** `virsh screenshot` has to round-trip the guest's framebuffer, `claude -p` has to think. */
 const timeouts = { virsh: 30_000, claude: 300_000 };
 
+/**
+ * Run a command and return its stdout.
+ * A tracked "Doing something... done." line for every screenshot, scroll event, and page
+ * buries the answers, so the status line is only shown when debugging.
+ */
+function run(text: string, timeout: number, command: string, ...args: string[]): string {
+	if (debugMode) {
+		io.setCommandTimeout(timeout);
+		return io.trackCommand({ text }, command, ...args);
+	}
+
+	try {
+		return execFileSync(command, args, { encoding: 'utf-8', timeout, stdio: ['ignore', 'pipe', 'pipe'] });
+	} catch (e: any) {
+		const stderr = typeof e?.stderr == 'string' ? e.stderr.trim() : '';
+		throw new Error(stderr.slice(0, 200) || io.errorText(e));
+	}
+}
+
 function virsh(text: string, ...args: string[]): string {
-	io.setCommandTimeout(timeouts.virsh);
-	return io.trackCommand({ text }, 'virsh', '-c', data.url, ...args);
+	return run(text, timeouts.virsh, 'virsh', '-c', data.url, ...args);
 }
 
 function domain(): string {
@@ -125,8 +145,13 @@ export async function scroll(count: number = data.scroll.count): Promise<void> {
 
 	for (let i = 0; i < count; i++) {
 		const text = `Scrolling ${direction}` + (count > 1 ? ` (${i + 1}/${count})` : '');
-		if (method == 'key') virsh(text, 'send-key', domain(), '--codeset', 'linux', '--holdtime', '50', key);
-		else virsh(text, 'qemu-monitor-command', domain(), event);
+		try {
+			if (method == 'key') virsh(text, 'send-key', domain(), '--codeset', 'linux', '--holdtime', '50', key);
+			else virsh(text, 'qemu-monitor-command', domain(), event);
+		} catch (e) {
+			io.warn('could not scroll:', io.errorText(e));
+			return;
+		}
 		await sleep(delay);
 	}
 }
@@ -148,9 +173,9 @@ Rules:
 
 /** Ask the model to answer every question fully visible in `image`. */
 function answerPage(image: string, explain: boolean): string[] {
-	io.setCommandTimeout(timeouts.claude);
-	const output = io.trackCommand(
-		{ text: 'Answering questions' },
+	const output = run(
+		'Answering questions',
+		timeouts.claude,
 		'claude',
 		'-p',
 		questionPrompt(image, explain),
