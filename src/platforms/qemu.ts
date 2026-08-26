@@ -250,7 +250,7 @@ export interface AutoOptions {
 	onResume?(count: number, out: string): void;
 	onAnswer?(line: string): void;
 	onPage?(page: number, added: number, total: number): void;
-	onDone?(pages: number, total: number, pageDir: string, out?: string): void;
+	onDone?(total: number, out?: string): void;
 	onError?(page: number, error: unknown): void;
 }
 
@@ -318,5 +318,5 @@ export async function autoComplete(opts: AutoOptions) {
 		await sleep(data.renderDelay);
 	}
 
-	opts.onDone?.(page, total, pageDir, out);
+	opts.onDone?.(total, out);
 }

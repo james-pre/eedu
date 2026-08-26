@@ -134,9 +134,8 @@ cli_auto
 			onError(page, error) {
 				io.warn(`claude failed on page ${page}: ${error}`);
 			},
-			onDone(pages, total, pageDir, out) {
-				console.log(`\npages captured: ${pages}  ->  ${pageDir}`);
-				console.log(`answers:        ${total}${out ? `  ->  ${out}` : ''}`);
+			onDone(total, out) {
+				console.log('answers:', total + (out ? ', saved to ' + out : ''));
 			},
 		});
 	});
