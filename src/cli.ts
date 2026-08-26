@@ -113,11 +113,16 @@ cli_auto
 cli_auto
 	.command('qemu')
 	.description('Answer questions visible on a VM screen, scrolling until the screen stops changing')
-	.option('-n, --pages <n>', 'Stop after this many screenfuls', v => parseInt(v, 10), 40)
+	.option('-n, --pages <n>', 'Stop after this many screenfuls', v => parseInt(v), 50)
 	.option('-1, --once', 'One screenful, no scroll (end-to-end smoke test)', false)
 	.option('-o, --out <path>', 'Answers file, if not specified write to standard output')
 	.option('--no-scroll', 'Answer but never scroll')
-	.option('-i, --initial-scroll', 'Scroll once before the first screenshot, for pages that start above the questions', false)
+	.option(
+		'-i, --initial-scroll <amount>',
+		'How much to scroll before the first screenshot, for pages that start above the questions',
+		v => parseInt(v),
+		3
+	)
 	.option('--explain', 'Ask for a one-line reason with each answer', false)
 	.option('--resume', 'Append to an existing answers file, skipping questions already recorded in it', false)
 	.action(async options => {

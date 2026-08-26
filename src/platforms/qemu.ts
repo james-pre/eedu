@@ -242,7 +242,7 @@ export interface AutoOptions {
 	/** Answer but never scroll, which means a single useful pass */
 	scroll: boolean;
 	/** Scroll once before the first screenshot, for pages that start above the questions */
-	initialScroll: boolean;
+	initialScroll: number;
 	/** Answers file. When unset, answers are only reported through {@link AutoOptions.onAnswer} */
 	out?: string;
 	/** Ask for a one-line reason with each answer */
@@ -280,7 +280,7 @@ export async function autoComplete(opts: AutoOptions) {
 	}
 
 	if (opts.initialScroll) {
-		await scroll();
+		await scroll(opts.initialScroll);
 		await sleep(data.renderDelay);
 	}
 
