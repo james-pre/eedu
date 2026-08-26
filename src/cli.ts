@@ -117,6 +117,7 @@ cli_auto
 	.option('-1, --once', 'One screenful, no scroll (end-to-end smoke test)', false)
 	.option('-o, --out <path>', 'Answers file, if not specified write to standard output')
 	.option('--no-scroll', 'Answer but never scroll')
+	.option('-i, --initial-scroll', 'Scroll once before the first screenshot, for pages that start above the questions', false)
 	.option('--explain', 'Ask for a one-line reason with each answer', false)
 	.option('--resume', 'Append to an existing answers file, skipping questions already recorded in it', false)
 	.action(async options => {

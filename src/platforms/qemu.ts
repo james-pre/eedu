@@ -241,6 +241,8 @@ export interface AutoOptions {
 	pages: number;
 	/** Answer but never scroll, which means a single useful pass */
 	scroll: boolean;
+	/** Scroll once before the first screenshot, for pages that start above the questions */
+	initialScroll: boolean;
 	/** Answers file. When unset, answers are only reported through {@link AutoOptions.onAnswer} */
 	out?: string;
 	/** Ask for a one-line reason with each answer */
@@ -275,6 +277,11 @@ export async function autoComplete(opts: AutoOptions) {
 		opts.onResume?.(seen.size, out);
 	} else if (out) {
 		writeFileSync(out, `# Answers — ${runId}\n\n`);
+	}
+
+	if (opts.initialScroll) {
+		await scroll();
+		await sleep(data.renderDelay);
 	}
 
 	let previous = '';
