@@ -38,7 +38,7 @@ export const QemuData = z.object({
 			method: z.enum(['key', 'wheel']).default('wheel'),
 			direction: z.enum(['down', 'up']).default('down'),
 			/** Scroll events sent per page */
-			count: z.int().positive().default(5),
+			count: z.int().positive().default(7),
 			/** Milliseconds between scroll events */
 			delay: z.int().nonnegative().default(150),
 		})
