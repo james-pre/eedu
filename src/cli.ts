@@ -151,10 +151,31 @@ const cli_grades = cli.command('grades').description('Manage grades');
 cli_grades
 	.command('show')
 	.description('Show grades')
-	.option('-a, --all-terms', 'Show grades for all terms, not just the active ones')
+	.option('-a, --all-terms', 'Show grades for all terms, not just the active ones', false)
+	.option('-l, --long', 'Show details for each category', false)
+	.option('-p, --predict', 'Predict category grades based on current score averages', false)
+	.option('-P, --predict-full-category', 'Predict scores for completely unknown categories using known ones (likely inaccurate)', false)
+	.option(
+		'--error-alignment <n>',
+		'Spaces used in place of a missing error percentage, may fix alignment on some terminals',
+		v => parseInt(v),
+		9
+	)
 	.argument('[course]', 'Course ID or name to show grades for, supports partial matches and is case insensitive')
-	.action(course => {
-		// @todo
+	.addHelpText(
+		'after',
+		`
+Percentage colors:
+  Red = failing
+  Yellow = below target
+  Cyan = meets target
+  Green = meets ideal
+  Blue = otherwise`
+	)
+	.action((course, options) => {
+		const courses = grades.findCourses(course, options.allTerms);
+		if (course && !courses.length) throw new Error('No grades found for ' + course);
+		for (const course of courses) grades.show(course.name, course.grades, options);
 	});
 
 cli_grades
