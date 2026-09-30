@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
 import { Manager } from '@james-pre/config';
+import * as io from 'ioium/node';
 import { join } from 'node:path';
 import { dataDir, school } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
@@ -22,7 +23,15 @@ store.loadFile(join(dataDir, 'canvas.json'), { create: true });
 
 export const data = store.data;
 
-export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
+export class TokenError extends Error {
+	constructor() {
+		super('Canvas access token is invalid or expired, run `eedu discover canvas` to replace it');
+	}
+}
+
+async function request(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}) {
+	if (!data.origin || !data.token) throw new Error('Canvas is not set up, run `eedu discover canvas`');
+
 	const url = new URL(endpoint, data.origin + '/api/v1/');
 	const response = await fetch(url, {
 		method,
@@ -35,6 +44,8 @@ export async function api<T = any>(method: string, endpoint: string, body?: any,
 		},
 	});
 
+	if (response.status == 401 && response.headers.has('WWW-Authenticate')) throw new TokenError();
+
 	const json: any = await response.json().catch(() => ({ errors: [{ message: response.statusText }] }));
 
 	if (!response.ok) {
@@ -42,13 +53,40 @@ export async function api<T = any>(method: string, endpoint: string, body?: any,
 		throw new Error(message ?? `${method} ${endpoint} failed: ` + response.statusText);
 	}
 
+	return { response, json };
+}
+
+export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
+	const { json } = await request(method, endpoint, body, headers);
 	return json;
+}
+
+/** GET every page of a list endpoint */
+export async function apiAll<T>(endpoint: string): Promise<T[]> {
+	const results: T[] = [];
+	let next: string | undefined = endpoint + (endpoint.includes('?') ? '&' : '?') + 'per_page=100';
+	while (next) {
+		const { response, json } = await request('GET', next);
+		results.push(...json);
+		next = response.headers.get('Link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+	}
+	return results;
 }
 
 export async function discover(options: DiscoverOptions) {
 	if (!data.origin) {
 		const domain = await prompt('Enter the Canvas instance domain: ');
 		data.origin = normalizeURL(domain).origin;
+	}
+
+	if (data.token) {
+		try {
+			await api('GET', 'users/self');
+		} catch (e) {
+			if (!(e instanceof TokenError)) throw e;
+			io.warn('Your Canvas access token is invalid or expired.');
+			data.token = undefined;
+		}
 	}
 
 	if (!data.token) {
@@ -63,7 +101,9 @@ export async function discover(options: DiscoverOptions) {
 
 	store.update({ origin: data.origin, token: data.token });
 
-	for (const course of await api<types.Course[]>('GET', 'courses?include[]=term')) {
+	for (const course of await apiAll<types.Course>('courses?include[]=term')) {
+		if (course.access_restricted_by_date) continue;
+
 		const existing_term = school.data.terms.find(t => t.canvas_id == course.term.id);
 
 		const term_id = course.term.name.replace(/\s+/g, '_').toLowerCase();
@@ -93,10 +133,10 @@ export async function discover(options: DiscoverOptions) {
 
 		if (!options.recursive) continue;
 
-		const modules = await api<types.Module[]>('GET', `courses/${course.id}/modules?include[]=items`);
+		const modules = await apiAll<types.Module>(`courses/${course.id}/modules?include[]=items`);
 
 		for (const module of modules) {
-			module.items ||= await api<types.ModuleItem[]>('GET', module.items_url);
+			module.items ||= await apiAll<types.ModuleItem>(module.items_url);
 			for (const item of module.items) {
 				if (item.type != 'ExternalTool') continue;
 
