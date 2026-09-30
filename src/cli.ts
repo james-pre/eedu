@@ -1,7 +1,8 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import * as io from 'ioium/node';
 import { basename } from 'node:path';
 import { styleText } from 'node:util';
+import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import { debugMode } from './config.js';
 import { school } from './data.js';
@@ -193,7 +194,7 @@ cli_grades
 		io.table(
 			[
 				{ name: 'ID', text: c => c.id },
-				{ name: 'Course', text: c => c.course.id },
+				{ name: 'Course', text: c => c.course.name },
 				{ name: 'Category', text: c => c.category },
 				{ name: 'Name', text: c => c.item.name },
 				{ name: 'Previous', text: c => styleText('dim', score(c.previous)), padStart: true },
@@ -213,3 +214,34 @@ cli_grades
 	.action((ids, options) => {
 		for (const id of ids) grades.setIgnored(id, !options.undo);
 	});
+
+cli_grades
+	.command('move')
+	.description('Move imported grades to another category, where they will stay when pulling')
+	.argument('<category>', 'Name of the category, which must already exist')
+	.argument('<ids...>', 'IDs of the grades, as shown by `eedu grades pull`')
+	.action((category, ids) => grades.move(ids, category));
+
+const cli_category = cli_grades.command('category').description('Manage grade categories');
+
+cli_category
+	.command('set')
+	.description('Create or change a category')
+	.argument('<course>', 'Course ID or name, supports partial matches and is case insensitive')
+	.argument('<name>', 'Name of the category')
+	.option('-w, --weight <weight>', 'Share of the course grade, e.g. 20% or 0.2 (required for new categories)', v =>
+		grades.Weight.parse(v)
+	)
+	.addOption(
+		new Option('-m, --mode <mode>', 'How scores are combined: total points, or the average percentage').choices([...grades.Mode.values])
+	)
+	.option('-d, --dropped <n>', 'Number of lowest scores to drop', v => z.int().nonnegative().parse(Number(v)))
+	.action((course, name, options) => grades.setCategory(grades.findCourse(course).id, name, options));
+
+cli_category
+	.command('remove')
+	.alias('rm')
+	.description('Remove a category without any grades')
+	.argument('<course>', 'Course ID or name, supports partial matches and is case insensitive')
+	.argument('<name>', 'Name of the category')
+	.action((course, name) => grades.removeCategory(grades.findCourse(course).id, name));
