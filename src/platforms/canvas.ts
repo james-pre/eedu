@@ -5,6 +5,7 @@ import * as io from 'ioium/node';
 import { join } from 'node:path';
 import { dataDir, school } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
+import type { GradeSource } from '../grades.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { normalizeURL } from '../utils.js';
 import type * as types from './canvas.types.js';
@@ -151,3 +152,27 @@ export async function discover(options: DiscoverOptions) {
 
 	school.update({ terms: school.data.terms, courses: school.data.courses });
 }
+
+interface AssignmentGroup extends Omit<types.AssignmentGroup, 'assignments'> {
+	assignments: types.Assignment[];
+}
+
+export const grades: GradeSource = {
+	name: 'canvas',
+	has: course => course.canvas_id !== undefined,
+	async pull(course) {
+		const { apply_assignment_group_weights } = await api<types.Course>('GET', `courses/${course.canvas_id}`);
+		const groups = await apiAll<AssignmentGroup>(
+			`courses/${course.canvas_id}/assignment_groups?include[]=assignments&include[]=submission`
+		);
+
+		return groups.map(group => ({
+			name: group.name,
+			weight: apply_assignment_group_weights ? group.group_weight / 100 : undefined,
+			dropped: group.rules?.drop_lowest ?? 0,
+			scores: group.assignments
+				.filter(a => !a.omit_from_final_grade && a.grading_type != 'not_graded' && !a.submission?.excused)
+				.map(a => ({ id: String(a.id), name: a.name, score: a.submission?.score ?? null, possible: a.points_possible ?? 0 })),
+		}));
+	},
+};

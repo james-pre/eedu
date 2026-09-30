@@ -257,6 +257,10 @@ export interface User {
 export interface Submission {
 	id: number;
 	student_entered_score: string;
+	score: number | null;
+	grade: string | null;
+	excused: boolean;
+	workflow_state: 'submitted' | 'unsubmitted' | 'graded' | 'pending_review';
 }
 
 export interface AssignmentDate {
@@ -323,7 +327,7 @@ export interface Assignment {
 		| 'student_annotation'
 	)[];
 	has_submitted_submissions: boolean;
-	grading_type: 'pass_fail' | 'percent' | 'letter_grade' | 'gpa_scale' | 'points';
+	grading_type: 'pass_fail' | 'percent' | 'letter_grade' | 'gpa_scale' | 'points' | 'not_graded';
 	grading_standard_id: number;
 	published: boolean;
 	unpublishable: boolean;

@@ -35,3 +35,10 @@ export interface School extends z.infer<typeof School> {}
 
 export const school = new Manager(School);
 school.loadFile(join(dataDir, 'school.json'), { create: true });
+
+/** Whether the course's term is in progress, or is unknown. */
+export function inProgress(course?: Course): boolean {
+	const term = school.data.terms.find(t => t.id == course?.term);
+	const now = new Date();
+	return !term || (now >= term.start && now <= term.end);
+}

@@ -181,6 +181,35 @@ Percentage colors:
 cli_grades
 	.command('pull')
 	.description('Fetch grades from discovered platforms')
-	.action(async () => {
-		// @todo
+	.option('-a, --all-terms', 'Fetch grades for all terms, not just the active ones', false)
+	.action(async options => {
+		const changes = await grades.pull([canvas.grades], options.allTerms);
+		if (!changes.length) {
+			console.log('No new or updated grades.');
+			return;
+		}
+
+		const score = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.possible}` : '');
+		io.table(
+			[
+				{ name: 'ID', text: c => c.id },
+				{ name: 'Course', text: c => c.course.id },
+				{ name: 'Category', text: c => c.category },
+				{ name: 'Name', text: c => c.item.name },
+				{ name: 'Previous', text: c => styleText('dim', score(c.previous)), padStart: true },
+				{ name: 'Score', text: c => score(c.item) + (c.item.possible ? '' : styleText('yellow', ' (not counted)')), grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			changes
+		);
+		console.log(styleText('dim', 'Use `eedu grades ignore <id...>` to exclude grades that should not count.'));
+	});
+
+cli_grades
+	.command('ignore')
+	.description('Exclude imported grades from calculations')
+	.argument('<ids...>', 'IDs of the grades, as shown by `eedu grades pull`')
+	.option('-u, --undo', 'Include the grades again', false)
+	.action((ids, options) => {
+		for (const id of ids) grades.setIgnored(id, !options.undo);
 	});
