@@ -1,3 +1,4 @@
+import { Manager } from '@james-pre/config';
 import * as io from 'ioium/node';
 import sharp from 'sharp';
 import { execFileSync } from 'node:child_process';
@@ -6,7 +7,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSy
 import { join } from 'node:path';
 import * as z from 'zod';
 import { debugMode } from '../config.js';
-import { dataDir, dataFrom } from '../data.js';
+import { dataDir } from '../data.js';
 import { onAdd, prompt, select } from '../discovery.js';
 
 export const QemuData = z.object({
@@ -49,7 +50,10 @@ export const QemuData = z.object({
 
 export interface QemuData extends z.infer<typeof QemuData> {}
 
-export let data = dataFrom('qemu.json', QemuData, QemuData.parse({}));
+export const store = new Manager(QemuData);
+store.loadFile(join(dataDir, 'qemu.json'), { create: true });
+
+export const data = store.data;
 
 /** `virsh screenshot` has to round-trip the guest's framebuffer, `claude -p` has to think. */
 const timeouts = { virsh: 30_000, claude: 300_000 };
@@ -209,7 +213,7 @@ export async function discover() {
 
 	if (!domains.includes(data.name)) throw new Error(`No domain '${data.name}' on ${data.url}`);
 
-	data.write();
+	store.update(data);
 
 	// The only reliable way to learn the guest's resolution is to look at it.
 	assertRunning();
@@ -225,7 +229,7 @@ export async function discover() {
 		rmSync(probe, { force: true });
 	}
 
-	data.write();
+	store.update(data);
 
 	onAdd('vm', `${data.name} (${data.width}x${data.height})`);
 

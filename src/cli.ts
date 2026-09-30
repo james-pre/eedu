@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import { styleText } from 'node:util';
 import $pkg from '../package.json' with { type: 'json' };
 import { debugMode } from './config.js';
-import { courses } from './data.js';
+import { school } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as qemu from './platforms/qemu.js';
@@ -24,11 +24,11 @@ cli_courses
 	.option('-l, --long', 'Use long listing format', false)
 	.action(opts => {
 		if (!opts.long) {
-			console.log(courses.map(c => c.name).join('\n'));
+			console.log(school.data.courses.map(c => c.name).join('\n'));
 			return;
 		}
 
-		for (const course of courses) {
+		for (const course of school.data.courses) {
 			console.log(course.name);
 		}
 	});
@@ -40,8 +40,8 @@ cli_courses
 	.argument('<name>', 'Course name')
 	.argument('<term>', 'Course term')
 	.action(async (id, name, term, options) => {
-		courses.push({ id, name, term });
-		courses.write();
+		school.data.courses.push({ id, name, term });
+		school.update(school.data);
 	});
 
 const cli_discover = cli.command('discover').description('Discover accounts, courses, etc.');

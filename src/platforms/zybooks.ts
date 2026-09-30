@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
-import { dataFrom } from '../data.js';
+import { Manager } from '@james-pre/config';
+import { join } from 'node:path';
+import { dataDir } from '../data.js';
 import { onAdd, prompt } from '../discovery.js';
 
 export const ZybooksData = z.object({
-	token: z.string().optional(),
+	token: z.string().nullish(),
 	user_id: z.int().optional(),
 	books: z.string().array().default([]),
 	completed_resources: z.int().array().default([]),
@@ -13,7 +15,10 @@ export const ZybooksData = z.object({
 
 export interface ZybooksData extends z.infer<typeof ZybooksData> {}
 
-export let data = dataFrom('zybooks.json', ZybooksData, { books: [], completed_resources: [] });
+export const store = new Manager(ZybooksData);
+store.loadFile(join(dataDir, 'zybooks.json'), { create: true });
+
+export const data = store.data;
 
 export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
 	const url = new URL(endpoint, 'https://zyserver.zybooks.com/v1/');
@@ -119,7 +124,7 @@ export async function discover() {
 		data.token = token.trim();
 	}
 
-	data.write();
+	store.update(data);
 
 	let zybooks;
 
@@ -132,8 +137,7 @@ export async function discover() {
 			|| (e.message != 'Auth token is expired.' && e.message != 'Your session has expired, please refresh the page.')
 		)
 			throw e;
-		delete data.token;
-		data.write();
+		store.update({ token: null });
 		return await discover();
 	}
 
@@ -144,7 +148,7 @@ export async function discover() {
 		onAdd('zybook', book.title);
 	}
 
-	data.write();
+	store.update(data);
 }
 
 // Regex to match: <meta name="zybooks-web/config/environment" content="...">
@@ -294,10 +298,10 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 						break;
 				}
 				if (!data.completed_resources.includes(resource.id)) data.completed_resources.push(resource.id);
-				data.write();
+				store.update(data);
 			}
 		}
 	}
 
-	data.write();
+	store.update(data);
 }

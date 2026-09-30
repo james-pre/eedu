@@ -38,7 +38,7 @@
 		"commander": "^15.0.0",
 		"ioium": "^1.8.0",
 		"sharp": "^0.35.4",
-		"zod": "^4.3.6"
+		"zod": "^4.5.0"
 	},
 	"devDependencies": {
 		"@commander-js/extra-typings": "^15.0.0",

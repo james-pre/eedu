@@ -1,6 +1,8 @@
 import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
-import { courses, dataFrom, terms } from '../data.js';
+import { Manager } from '@james-pre/config';
+import { join } from 'node:path';
+import { dataDir, school } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { normalizeURL } from '../utils.js';
@@ -15,7 +17,10 @@ export const CanvasData = z
 
 export interface CanvasData extends z.infer<typeof CanvasData> {}
 
-export let data = dataFrom('canvas.json', CanvasData, {});
+export const store = new Manager(CanvasData);
+store.loadFile(join(dataDir, 'canvas.json'), { create: true });
+
+export const data = store.data;
 
 export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
 	const url = new URL(endpoint, data.origin + '/api/v1/');
@@ -56,15 +61,15 @@ export async function discover(options: DiscoverOptions) {
 		data.token = token.trim();
 	}
 
-	data.write();
+	store.update(data);
 
 	for (const course of await api<types.Course[]>('GET', 'courses?include[]=term')) {
-		const existing_term = terms.find(t => t.canvas_id == course.term.id);
+		const existing_term = school.data.terms.find(t => t.canvas_id == course.term.id);
 
 		const term_id = course.term.name.replace(/\s+/g, '_').toLowerCase();
 
 		if (course.term && !existing_term) {
-			terms.push({
+			school.data.terms.push({
 				id: term_id,
 				name: course.term.name,
 				start: new Date(course.term.start_at),
@@ -74,10 +79,10 @@ export async function discover(options: DiscoverOptions) {
 			onAdd('term', course.term.name);
 		}
 
-		const existing = courses.find(c => c.canvas_id == course.id);
+		const existing = school.data.courses.find(c => c.canvas_id == course.id);
 
 		if (!existing) {
-			courses.push({
+			school.data.courses.push({
 				id: course.course_code,
 				name: course.name,
 				term: term_id,
@@ -104,6 +109,5 @@ export async function discover(options: DiscoverOptions) {
 		}
 	}
 
-	terms.write();
-	courses.write();
+	school.update(school.data);
 }
