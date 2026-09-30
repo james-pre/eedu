@@ -61,7 +61,7 @@ export async function discover(options: DiscoverOptions) {
 		data.token = token.trim();
 	}
 
-	store.update(data);
+	store.update({ origin: data.origin, token: data.token });
 
 	for (const course of await api<types.Course[]>('GET', 'courses?include[]=term')) {
 		const existing_term = school.data.terms.find(t => t.canvas_id == course.term.id);
@@ -109,5 +109,5 @@ export async function discover(options: DiscoverOptions) {
 		}
 	}
 
-	school.update(school.data);
+	school.update({ terms: school.data.terms, courses: school.data.courses });
 }

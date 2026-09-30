@@ -213,7 +213,7 @@ export async function discover() {
 
 	if (!domains.includes(data.name)) throw new Error(`No domain '${data.name}' on ${data.url}`);
 
-	store.update(data);
+	store.update({ url: data.url, dir: data.dir, name: data.name });
 
 	// The only reliable way to learn the guest's resolution is to look at it.
 	assertRunning();
@@ -229,7 +229,7 @@ export async function discover() {
 		rmSync(probe, { force: true });
 	}
 
-	store.update(data);
+	store.update({ width: data.width, height: data.height });
 
 	onAdd('vm', `${data.name} (${data.width}x${data.height})`);
 

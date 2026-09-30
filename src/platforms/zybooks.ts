@@ -124,7 +124,7 @@ export async function discover() {
 		data.token = token.trim();
 	}
 
-	store.update(data);
+	store.update({ user_id: data.user_id, token: data.token });
 
 	let zybooks;
 
@@ -148,7 +148,7 @@ export async function discover() {
 		onAdd('zybook', book.title);
 	}
 
-	store.update(data);
+	store.update({ books: data.books });
 }
 
 // Regex to match: <meta name="zybooks-web/config/environment" content="...">
@@ -298,10 +298,10 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 						break;
 				}
 				if (!data.completed_resources.includes(resource.id)) data.completed_resources.push(resource.id);
-				store.update(data);
+				store.update({ completed_resources: data.completed_resources });
 			}
 		}
 	}
 
-	store.update(data);
+	store.update({ completed_resources: data.completed_resources });
 }

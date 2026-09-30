@@ -41,7 +41,7 @@ cli_courses
 	.argument('<term>', 'Course term')
 	.action(async (id, name, term, options) => {
 		school.data.courses.push({ id, name, term });
-		school.update(school.data);
+		school.update({ courses: school.data.courses });
 	});
 
 const cli_discover = cli.command('discover').description('Discover accounts, courses, etc.');
