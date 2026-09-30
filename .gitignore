@@ -2,6 +2,7 @@
 !.gitignore
 !.vscode
 !.github
+*.tsbuildinfo
 tmp
 dist
 node_modules
