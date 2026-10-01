@@ -43,6 +43,8 @@ export const Category = z.object({
 	weight: Weight,
 	mode: Mode.default('points'),
 	dropped: z.int().nonnegative().default(0),
+	/** How many assignments the category will have, so ones that haven't been posted yet count as unknown */
+	expected: z.int().nonnegative().optional(),
 	/** By `<platform>:<id>` */
 	scores: z.record(z.string(), Item).default({}),
 });
@@ -90,16 +92,20 @@ export interface CategoryStats extends Category {
 
 /**
  * Scores that are ignored or worth no points are not counted.
+ * Missing expected scores are unknown and worth the average points of the others.
  * A category without any counted scores is entirely unknown.
  */
 export function categoryStats(name: string, category: Category): CategoryStats {
-	const { weight, dropped, mode } = category;
+	const { weight, dropped, mode, expected = 0 } = category;
 
 	const scores = Object.values(category.scores)
 		.filter(item => !item.ignored && item.possible > 0)
 		.map(({ score, possible }) =>
 			mode == 'average' ? { score: score === null ? null : score / possible, possible: 1 } : { score, possible }
 		);
+
+	const averagePossible = scores.length ? scores.reduce((sum, s) => sum + s.possible, 0) / scores.length : 1;
+	for (let i = scores.length; i < expected; i++) scores.push({ score: null, possible: averagePossible });
 
 	const known = scores.filter(s => s.score !== null).sort((a, b) => a.score! / a.possible - b.score! / b.possible);
 	const dropCount = Math.min(dropped, known.length);
@@ -334,17 +340,19 @@ export interface CategoryOptions {
 	weight?: number;
 	mode?: Mode;
 	dropped?: number;
+	expected?: number;
 }
 
 /** Create or change a category. New categories require a weight. */
 export function setCategory(course: string, name: string, options: CategoryOptions) {
-	const { weight, mode, dropped } = options;
+	const { weight, mode, dropped, expected } = options;
 	if (weight === undefined && !data.courses[course]?.categories[name]) throw new Error('A weight is required for a new category');
 
 	const category: CategoryOptions = {};
 	if (weight !== undefined) category.weight = weight;
 	if (mode !== undefined) category.mode = mode;
 	if (dropped !== undefined) category.dropped = dropped;
+	if (expected !== undefined) category.expected = expected;
 	store.update({ courses: { [course]: { categories: { [name]: category } } } });
 }
 

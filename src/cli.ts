@@ -5,7 +5,7 @@ import { styleText } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import { debugMode } from './config.js';
-import { school } from './data.js';
+import { school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as qemu from './platforms/qemu.js';
@@ -154,6 +154,28 @@ const points = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.poss
 const status = (item: grades.Item) =>
 	styleText('yellow', [item.ignored && 'ignored', !item.possible && 'not counted', item.moved && 'moved'].filter(x => x).join(', '));
 
+/** @param withContext Include the course and category of each grade */
+function gradeTable(rows: grades.GradeRow[], withContext: boolean = true) {
+	const columns: io.TableColumn<grades.GradeRow>[] = [
+		{ name: 'ID', text: r => r.id },
+		{ name: 'Course', text: r => r.course.name },
+		{ name: 'Category', text: r => r.category },
+		{ name: 'Name', text: r => r.item.name },
+		{ name: 'Score', text: r => points(r.item), padStart: true },
+		{
+			name: '%',
+			text: r => (r.item.score === null || !r.item.possible ? '' : percent(r.item.score / r.item.possible)),
+			padStart: true,
+		},
+		{ name: 'Status', text: r => status(r.item), grow: 0 },
+	];
+	io.table(
+		columns.filter(c => withContext || (c.name != 'Course' && c.name != 'Category')),
+		{ formatHead: text => styleText('bold', text) },
+		rows
+	);
+}
+
 cli_grades
 	.command('show')
 	.description('Show grades')
@@ -225,23 +247,7 @@ cli_grades
 			return;
 		}
 
-		io.table(
-			[
-				{ name: 'ID', text: r => r.id },
-				{ name: 'Course', text: r => r.course.name },
-				{ name: 'Category', text: r => r.category },
-				{ name: 'Name', text: r => r.item.name },
-				{ name: 'Score', text: r => points(r.item), padStart: true },
-				{
-					name: '%',
-					text: r => (r.item.score === null || !r.item.possible ? '' : percent(r.item.score / r.item.possible)),
-					padStart: true,
-				},
-				{ name: 'Status', text: r => status(r.item), grow: 0 },
-			],
-			{ formatHead: text => styleText('bold', text) },
-			rows
-		);
+		gradeTable(rows);
 	});
 
 cli_grades
@@ -274,16 +280,24 @@ cli_grades
 	.argument('<ids...>', 'IDs of the grades, as shown by `eedu grades pull`')
 	.action((category, ids) => grades.move(ids, category));
 
-const cli_category = cli_grades.command('category').description('Manage grade categories');
+const cli_category = cli_grades
+	.command('category')
+	.description('Manage grade categories')
+	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive')
+	.configureHelp({ showGlobalOptions: true });
+
+/** The course from `--course`, prompting for one if it's omitted */
+function categoryCourse(command: { optsWithGlobals(): { course?: string } }): Promise<Course> {
+	return grades.resolveCourse(command.optsWithGlobals().course);
+}
 
 cli_category
 	.command('list')
 	.alias('ls')
-	.description('List categories')
+	.description('List categories, optionally only those of courses matching --course')
 	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
-	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
-	.action(options => {
-		const categories = grades.listAllCategories(options);
+	.action(async function cli_category_list() {
+		const categories = grades.listAllCategories(this.optsWithGlobals());
 		if (!categories.length) {
 			console.log('No categories.');
 			return;
@@ -296,6 +310,7 @@ cli_category
 				{ name: 'Weight', text: c => percent(c.weight), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
 				{ name: 'Dropped', text: c => c.dropped || '', padStart: true },
+				{ name: 'Expected', text: c => c.expected ?? '', padStart: true },
 				{ name: 'Grades', text: c => Object.keys(c.scores).length, padStart: true, grow: 0 },
 			],
 			{ formatHead: text => styleText('bold', text) },
@@ -304,10 +319,40 @@ cli_category
 	});
 
 cli_category
+	.command('info')
+	.description('Show a category and its grades')
+	.argument('<name>', 'Name of the category, supports partial matches and is case insensitive')
+	.action(async function cli_category_info(name) {
+		const course = await categoryCourse(this);
+		name = grades.findCategory(course, name);
+		const category = grades.data.courses[course.id].categories[name];
+		const stats = grades.categoryStats(name, category);
+
+		const out = (key: string, value: string) => console.log(styleText('whiteBright', key + ':'), value);
+		const range = (x: number, err: number) => percent(x) + (err ? ' ± ' + percent(err) : '');
+
+		console.log(styleText('bold', `--- ${name} (${course.name}) ---`));
+		out('Weight', percent(category.weight));
+		out('Mode', category.mode);
+		if (category.dropped) out('Dropped', category.dropped.toString());
+		if (category.expected !== undefined) out('Expected', category.expected.toString());
+		out('Grade', range(stats.mean, stats.err) + ' of the course');
+		if (category.weight) out('Unweighted', range(stats.mean / category.weight, stats.err / category.weight));
+		if (stats.unknowns) out('Unknown', `${stats.unknowns} of ${stats.total}`);
+
+		const rows = Object.entries(category.scores).map(([id, item]) => ({
+			id,
+			course: { id: course.id, name: course.name, grades: grades.data.courses[course.id] },
+			category: name,
+			item,
+		}));
+		if (rows.length) gradeTable(rows, false);
+	});
+
+cli_category
 	.command('set')
 	.description('Create or change a category')
 	.argument('<name>', 'Name of the category')
-	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
 	.option('-w, --weight <weight>', 'Share of the course grade, e.g. 20% or 0.2 (required for new categories)', v =>
 		grades.Weight.parse(v)
 	)
@@ -315,15 +360,20 @@ cli_category
 		new Option('-m, --mode <mode>', 'How scores are combined: total points, or the average percentage').choices([...grades.Mode.values])
 	)
 	.option('-d, --dropped <n>', 'Number of lowest scores to drop', v => z.int().nonnegative().parse(Number(v)))
-	.action(async (name, { course, ...options }) => grades.setCategory((await grades.resolveCourse(course)).id, name, options));
+	.option('-e, --expected <n>', 'Number of assignments the category will have, including ones not posted yet', v =>
+		z.int().nonnegative().parse(Number(v))
+	)
+	.action(async function cli_category_set(name, options) {
+		const course = await categoryCourse(this);
+		grades.setCategory(course.id, name, options);
+	});
 
 cli_category
 	.command('remove')
 	.alias('rm')
 	.description('Remove a category without any grades')
 	.argument('<name>', 'Name of the category, supports partial matches and is case insensitive')
-	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
-	.action(async (name, options) => {
-		const course = await grades.resolveCourse(options.course);
+	.action(async function cli_category_remove(name) {
+		const course = await categoryCourse(this);
 		grades.removeCategory(course.id, grades.findCategory(course, name));
 	});
