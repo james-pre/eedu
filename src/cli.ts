@@ -149,6 +149,11 @@ cli_auto
 
 const cli_grades = cli.command('grades').description('Manage grades');
 
+const percent = (x: number) => (x * 100).toFixed(1) + '%';
+const points = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.possible}` : '');
+const status = (item: grades.Item) =>
+	styleText('yellow', [item.ignored && 'ignored', !item.possible && 'not counted', item.moved && 'moved'].filter(x => x).join(', '));
+
 cli_grades
 	.command('show')
 	.description('Show grades')
@@ -190,20 +195,67 @@ cli_grades
 			return;
 		}
 
-		const score = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.possible}` : '');
 		io.table(
 			[
 				{ name: 'ID', text: c => c.id },
 				{ name: 'Course', text: c => c.course.name },
 				{ name: 'Category', text: c => c.category },
 				{ name: 'Name', text: c => c.item.name },
-				{ name: 'Previous', text: c => styleText('dim', score(c.previous)), padStart: true },
-				{ name: 'Score', text: c => score(c.item) + (c.item.possible ? '' : styleText('yellow', ' (not counted)')), grow: 0 },
+				{ name: 'Previous', text: c => styleText('dim', points(c.previous)), padStart: true },
+				{ name: 'Score', text: c => points(c.item), padStart: true },
+				{ name: 'Status', text: c => status(c.item), grow: 0 },
 			],
 			{ formatHead: text => styleText('bold', text) },
 			changes
 		);
 		console.log(styleText('dim', 'Use `eedu grades ignore <id...>` to exclude grades that should not count.'));
+	});
+
+cli_grades
+	.command('list')
+	.alias('ls')
+	.description('List grades')
+	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
+	.option('-C, --category <category>', 'Only categories whose name contains this (case insensitive)')
+	.action(options => {
+		const rows = grades.listGrades(options);
+		if (!rows.length) {
+			console.log('No grades.');
+			return;
+		}
+
+		io.table(
+			[
+				{ name: 'ID', text: r => r.id },
+				{ name: 'Course', text: r => r.course.name },
+				{ name: 'Category', text: r => r.category },
+				{ name: 'Name', text: r => r.item.name },
+				{ name: 'Score', text: r => points(r.item), padStart: true },
+				{
+					name: '%',
+					text: r => (r.item.score === null || !r.item.possible ? '' : percent(r.item.score / r.item.possible)),
+					padStart: true,
+				},
+				{ name: 'Status', text: r => status(r.item), grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			rows
+		);
+	});
+
+cli_grades
+	.command('add')
+	.description('Add a grade by hand')
+	.argument('<name>', 'Name of the assignment')
+	.argument('<score>', 'Points like 8/10, ?/10 if not graded yet, or a percentage like 85%', v => grades.Points.parse(v))
+	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
+	.option('-C, --category <category>', 'Category name, supports partial matches and is case insensitive (prompted for if omitted)')
+	.action(async (name, score, options) => {
+		const course = await grades.resolveCourse(options.course);
+		const category = await grades.resolveCategory(course, options.category);
+		const id = grades.addGrade(course.id, category, name, score);
+		console.log(`Added ${id} to ${category} in ${course.name}`);
 	});
 
 cli_grades
@@ -225,10 +277,37 @@ cli_grades
 const cli_category = cli_grades.command('category').description('Manage grade categories');
 
 cli_category
+	.command('list')
+	.alias('ls')
+	.description('List categories')
+	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
+	.action(options => {
+		const categories = grades.listAllCategories(options);
+		if (!categories.length) {
+			console.log('No categories.');
+			return;
+		}
+
+		io.table(
+			[
+				{ name: 'Course', text: c => c.course.name },
+				{ name: 'Category', text: c => c.name },
+				{ name: 'Weight', text: c => percent(c.weight), padStart: true },
+				{ name: 'Mode', text: c => c.mode },
+				{ name: 'Dropped', text: c => c.dropped || '', padStart: true },
+				{ name: 'Grades', text: c => Object.keys(c.scores).length, padStart: true, grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			categories
+		);
+	});
+
+cli_category
 	.command('set')
 	.description('Create or change a category')
-	.argument('<course>', 'Course ID or name, supports partial matches and is case insensitive')
 	.argument('<name>', 'Name of the category')
+	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
 	.option('-w, --weight <weight>', 'Share of the course grade, e.g. 20% or 0.2 (required for new categories)', v =>
 		grades.Weight.parse(v)
 	)
@@ -236,12 +315,15 @@ cli_category
 		new Option('-m, --mode <mode>', 'How scores are combined: total points, or the average percentage').choices([...grades.Mode.values])
 	)
 	.option('-d, --dropped <n>', 'Number of lowest scores to drop', v => z.int().nonnegative().parse(Number(v)))
-	.action((course, name, options) => grades.setCategory(grades.findCourse(course).id, name, options));
+	.action(async (name, { course, ...options }) => grades.setCategory((await grades.resolveCourse(course)).id, name, options));
 
 cli_category
 	.command('remove')
 	.alias('rm')
 	.description('Remove a category without any grades')
-	.argument('<course>', 'Course ID or name, supports partial matches and is case insensitive')
-	.argument('<name>', 'Name of the category')
-	.action((course, name) => grades.removeCategory(grades.findCourse(course).id, name));
+	.argument('<name>', 'Name of the category, supports partial matches and is case insensitive')
+	.option('-c, --course <course>', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
+	.action(async (name, options) => {
+		const course = await grades.resolveCourse(options.course);
+		grades.removeCategory(course.id, grades.findCategory(course, name));
+	});

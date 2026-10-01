@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import { dataDir, inProgress, school, type Course } from './data.js';
-import { prompt } from './discovery.js';
+import { prompt, select } from './discovery.js';
 
 function parseScore(text: string): number {
 	if (text.endsWith('%')) return Number(text.slice(0, -1)) / 100;
@@ -16,7 +16,7 @@ function parseScore(text: string): number {
 /** A percentage, fraction, or decimal */
 export const Score = z.union([z.number(), z.string().trim().min(1).transform(parseScore)]).pipe(z.number().nonnegative());
 
-/** A grade imported from a platform */
+/** A grade, either imported from a platform or added by hand */
 export const Item = z.object({
 	name: z.string(),
 	/** Points earned, or null if not graded yet */
@@ -357,6 +357,124 @@ export function removeCategory(course: string, name: string) {
 	edit(saved => {
 		delete saved.courses?.[course]?.categories?.[name];
 	});
+}
+
+/** Points like `8/10`, `?/10` when not graded yet, or a percentage like `85%` */
+export const Points = z
+	.string()
+	.trim()
+	.transform((text, ctx) => {
+		const percent = text.match(/^([\d.]+)%$/);
+		if (percent) return { score: Number(percent[1]), possible: 100 };
+		const fraction = text.match(/^(\?|[\d.]+)\/([\d.]+)$/);
+		if (fraction) return { score: fraction[1] == '?' ? null : Number(fraction[1]), possible: Number(fraction[2]) };
+		ctx.addIssue({ code: 'custom', message: 'Expected points (e.g. 8/10 or ?/10) or a percentage (e.g. 85%)' });
+		return z.NEVER;
+	})
+	.pipe(Item.pick({ score: true, possible: true }));
+
+export type Points = z.infer<typeof Points>;
+
+async function choose<T>(question: string, choices: string[], resolve: (answer: string) => T): Promise<T> {
+	for (;;) {
+		try {
+			return resolve(await select(question, choices));
+		} catch (e) {
+			io.warn(io.errorText(e));
+		}
+	}
+}
+
+/** The course matching `query`, or the one the user picks from courses in progress when there isn't one. */
+export async function resolveCourse(query?: string): Promise<Course> {
+	if (query) return findCourse(query);
+	const choices = school.data.courses.filter(c => inProgress(c)).map(c => c.name);
+	return await choose('Course', choices, findCourse);
+}
+
+/** The category of `course` whose name matches `query` (case-insensitive), preferring exact matches. */
+export function findCategory(course: Course, query: string): string {
+	const names = Object.keys(data.courses[course.id]?.categories ?? {});
+	const q = query.toLowerCase();
+	const exact = names.find(name => name.toLowerCase() == q);
+	if (exact) return exact;
+
+	const matches = names.filter(name => name.toLowerCase().includes(q));
+	if (matches.length == 1) return matches[0];
+	if (!matches.length) throw new Error(`No category in ${course.name} matches ${query}`);
+	throw new Error(`Multiple categories match ${query}: ` + matches.join(', '));
+}
+
+/** The category matching `query`, or the one the user picks when there isn't one. */
+export async function resolveCategory(course: Course, query?: string): Promise<string> {
+	if (query) return findCategory(course, query);
+	const names = Object.keys(data.courses[course.id]?.categories ?? {});
+	if (!names.length) throw new Error(`${course.name} has no categories, create one with \`eedu grades category set\``);
+	return await choose('Category', names, answer => findCategory(course, answer));
+}
+
+function nextManualId(): string {
+	let max = 0;
+	for (const { categories } of Object.values(data.courses)) {
+		for (const { scores } of Object.values(categories)) {
+			for (const id of Object.keys(scores)) {
+				const n = id.match(/^manual:(\d+)$/)?.[1];
+				if (n) max = Math.max(max, Number(n));
+			}
+		}
+	}
+	return 'manual:' + (max + 1);
+}
+
+/**
+ * Add a grade by hand. Pulling never changes it.
+ * @returns The new grade's ID
+ */
+export function addGrade(course: string, category: string, name: string, points: Points): string {
+	if (!data.courses[course]?.categories[category]) throw new Error(`${course} has no category ${category}`);
+	const id = nextManualId();
+	store.update({ courses: { [course]: { categories: { [category]: { scores: { [id]: { name, ...points } } } } } } });
+	return id;
+}
+
+export interface ListOptions {
+	course?: string;
+	category?: string;
+	allTerms?: boolean;
+}
+
+export interface GradeRow {
+	id: string;
+	course: GradedCourse;
+	category: string;
+	item: Item;
+}
+
+/** Grades in courses and categories whose names contain the given filters (case-insensitive). */
+export function listGrades(options: ListOptions): GradeRow[] {
+	const rows: GradeRow[] = [];
+	for (const course of findCourses(options.course, options.allTerms)) {
+		for (const { name: category } of listCategories(course, options.category)) {
+			for (const [id, item] of Object.entries(course.grades.categories[category].scores)) rows.push({ id, course, category, item });
+		}
+	}
+	return rows;
+}
+
+export interface CategoryRow extends Category {
+	course: GradedCourse;
+	name: string;
+}
+
+function listCategories(course: GradedCourse, query?: string): CategoryRow[] {
+	return Object.entries(course.grades.categories)
+		.filter(([name]) => !query || name.toLowerCase().includes(query.toLowerCase()))
+		.map(([name, category]) => ({ ...category, course, name }));
+}
+
+/** Categories of courses whose names contain `options.course` (case-insensitive). */
+export function listAllCategories(options: Omit<ListOptions, 'category'>): CategoryRow[] {
+	return findCourses(options.course, options.allTerms).flatMap(course => listCategories(course));
 }
 
 export interface ShowOptions {
