@@ -45,6 +45,64 @@ cli_courses
 		school.update({ courses: school.data.courses });
 	});
 
+cli_courses
+	.command('info')
+	.description('Show a course, its grade thresholds, and categories')
+	.argument('[course]', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
+	.action(async query => {
+		const course = await grades.resolveCourse(query);
+		const term = school.data.terms.find(t => t.id == course.term);
+		const courseGrades = grades.courseGrades(course.id);
+		const saved = grades.savedThresholds(course.id);
+		const stats = grades.courseStats(courseGrades);
+
+		const out = (key: string, value: string) => console.log(styleText('whiteBright', key + ':'), value);
+		const range = (x: number, err: number) => percent(x) + (err ? ' ± ' + percent(err) : '');
+
+		console.log(styleText('bold', `--- ${course.name} ---`));
+		out('ID', course.id);
+		if (term) out('Term', `${term.name} (${term.start.toLocaleDateString()} to ${term.end.toLocaleDateString()})`);
+		else out('Term', course.term);
+		if (course.canvas_id !== undefined) out('Canvas ID', course.canvas_id.toString());
+
+		for (const key of ['passing', 'target', 'ideal'] as const) {
+			const value = courseGrades[key];
+			const text = value === null ? styleText('dim', 'none') : percent(value);
+			out(key[0].toUpperCase() + key.slice(1), text + (saved[key] === undefined ? styleText('dim', ' (default)') : ''));
+		}
+
+		if (!stats.categories.length) return;
+
+		out('Grade', range(stats.grade, stats.err));
+		const totalWeight = stats.categories.reduce((sum, c) => sum + c.weight, 0);
+		if (Math.abs(totalWeight - 1) > 1e-9) io.warn(`Category weights add up to ${percent(totalWeight)}`);
+
+		io.table(
+			[
+				{ name: 'Category', text: c => c.name },
+				{ name: 'Weight', text: c => percent(c.weight), padStart: true },
+				{ name: 'Mode', text: c => c.mode },
+				{ name: 'Grade', text: c => range(c.mean, c.err), padStart: true },
+				{ name: 'Unknown', text: c => (c.unknowns ? `${c.unknowns}/${c.total}` : ''), padStart: true, grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			stats.categories
+		);
+	});
+
+cli_courses
+	.command('edit')
+	.description("Change a course's grade thresholds")
+	.argument('[course]', 'Course ID or name, supports partial matches and is case insensitive (prompted for if omitted)')
+	.option('-p, --passing <score>', 'Minimum passing grade, e.g. 60%, or "none"')
+	.option('-t, --target <score>', 'Grade you are aiming for, or "none"')
+	.option('-i, --ideal <score>', 'Best grade you hope for, or "none"')
+	.option('-r, --reset', 'Use the defaults for thresholds that are not given', false)
+	.action(async (query, { reset, ...thresholds }) => {
+		const course = await grades.resolveCourse(query);
+		grades.setThresholds(course.id, grades.Thresholds.parse(thresholds), reset);
+	});
+
 const cli_discover = cli.command('discover').description('Discover accounts, courses, etc.');
 
 setHandlers({
@@ -340,12 +398,7 @@ cli_category
 		if (category.weight) out('Unweighted', range(stats.mean / category.weight, stats.err / category.weight));
 		if (stats.unknowns) out('Unknown', `${stats.unknowns} of ${stats.total}`);
 
-		const rows = Object.entries(category.scores).map(([id, item]) => ({
-			id,
-			course: { id: course.id, name: course.name, grades: grades.data.courses[course.id] },
-			category: name,
-			item,
-		}));
+		const rows = grades.categoryGrades(course, name);
 		if (rows.length) gradeTable(rows, false);
 	});
 

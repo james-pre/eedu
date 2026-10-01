@@ -343,9 +343,13 @@ export interface CategoryOptions {
 	expected?: number;
 }
 
-/** Create or change a category. New categories require a weight. */
+/**
+ * Create or change a category, reusing an existing one whose name only differs in case.
+ * New categories require a weight.
+ */
 export function setCategory(course: string, name: string, options: CategoryOptions) {
 	const { weight, mode, dropped, expected } = options;
+	name = Object.keys(data.courses[course]?.categories ?? {}).find(n => n.toLowerCase() == name.toLowerCase()) ?? name;
 	if (weight === undefined && !data.courses[course]?.categories[name]) throw new Error('A weight is required for a new category');
 
 	const category: CategoryOptions = {};
@@ -462,11 +466,17 @@ export interface GradeRow {
 export function listGrades(options: ListOptions): GradeRow[] {
 	const rows: GradeRow[] = [];
 	for (const course of findCourses(options.course, options.allTerms)) {
-		for (const { name: category } of listCategories(course, options.category)) {
-			for (const [id, item] of Object.entries(course.grades.categories[category].scores)) rows.push({ id, course, category, item });
-		}
+		for (const { name } of listCategories(course, options.category)) rows.push(...gradeRows(course, name));
 	}
 	return rows;
+}
+
+function gradeRows(course: GradedCourse, category: string): GradeRow[] {
+	return Object.entries(course.grades.categories[category].scores).map(([id, item]) => ({ id, course, category, item }));
+}
+
+export function categoryGrades(course: Course, category: string): GradeRow[] {
+	return gradeRows({ id: course.id, name: course.name, grades: data.courses[course.id] }, category);
 }
 
 export interface CategoryRow extends Category {
@@ -483,6 +493,42 @@ function listCategories(course: GradedCourse, query?: string): CategoryRow[] {
 /** Categories of courses whose names contain `options.course` (case-insensitive). */
 export function listAllCategories(options: Omit<ListOptions, 'category'>): CategoryRow[] {
 	return findCourses(options.course, options.allTerms).flatMap(course => listCategories(course));
+}
+
+export const Threshold = z.union([z.literal('none').transform(() => null), Weight]);
+
+export const Thresholds = z.object({ passing: Threshold, target: Threshold, ideal: Threshold }).partial();
+
+export interface Thresholds extends z.infer<typeof Thresholds> {}
+
+/** The thresholds saved for a course, without defaults */
+export function savedThresholds(course: string): Thresholds {
+	const { passing, target, ideal } = store.configAt(store.findPath())?.courses?.[course] ?? {};
+	return { passing, target, ideal };
+}
+
+/**
+ * Change a course's thresholds.
+ * @param reset Remove the saved thresholds first, so the ones not given use the defaults
+ */
+export function setThresholds(course: string, thresholds: Thresholds, reset: boolean = false) {
+	if (reset)
+		edit(saved => {
+			const grades = saved.courses?.[course];
+			if (!grades) return;
+			delete grades.passing;
+			delete grades.target;
+			delete grades.ideal;
+		});
+
+	const update: Thresholds = {};
+	for (const key of ['passing', 'target', 'ideal'] as const) if (thresholds[key] !== undefined) update[key] = thresholds[key];
+	if (Object.keys(update).length) store.update({ courses: { [course]: update } });
+}
+
+/** The grades of a course, or the defaults when it has none */
+export function courseGrades(course: string): CourseGrades {
+	return data.courses[course] ?? CourseGrades.parse({});
 }
 
 export interface ShowOptions {
