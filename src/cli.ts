@@ -106,15 +106,12 @@ cli_courses
 const cli_discover = cli.command('discover').description('Discover accounts, courses, etc.');
 
 setHandlers({
-	async select(question: string, choices: string[], defaultValue?: string): Promise<string> {
-		const maybeUnderline = (choice: string) => (choice == defaultValue ? styleText('underline', choice) : choice);
-		using rl = io.getReadline();
-		return await rl.question(`${question} [${choices.map(maybeUnderline)}]: `);
+	select(question: string, choices: string[], defaultValue?: string): Promise<string> {
+		return io.select(question, choices, { default: defaultValue });
 	},
 	async prompt(question: string, defaultValue: string = ''): Promise<string> {
 		if (defaultValue) question += ` [${defaultValue}]`;
-		using rl = io.getReadline();
-		const value = await rl.question(question);
+		const value = await io.ask(question);
 		return value || defaultValue;
 	},
 	onAdd(...text: string[]) {

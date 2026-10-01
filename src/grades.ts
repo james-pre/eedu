@@ -389,8 +389,9 @@ export type Points = z.infer<typeof Points>;
 
 async function choose<T>(question: string, choices: string[], resolve: (answer: string) => T): Promise<T> {
 	for (;;) {
+		const answer = await select(question, choices);
 		try {
-			return resolve(await select(question, choices));
+			return resolve(answer);
 		} catch (e) {
 			io.warn(io.errorText(e));
 		}
