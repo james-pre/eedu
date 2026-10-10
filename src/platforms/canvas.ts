@@ -9,6 +9,7 @@ import { dataDir, school, type Course } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import type { GradeSource } from '../grades.js';
 import { discover as discoverZybooks } from './zybooks.js';
+import { toHTML } from '../text.js';
 import { normalizeURL } from '../utils.js';
 import type * as types from './canvas.types.js';
 
@@ -261,11 +262,6 @@ async function upload(endpoint: string, path: string): Promise<number> {
 	return ((await response.json()) as { id: number }).id;
 }
 
-/** Plain text as HTML that displays the same */
-export function textToHTML(text: string): string {
-	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>');
-}
-
 export const assignments: AssignmentSource = {
 	name: 'canvas',
 	has: course => course.canvas_id !== undefined,
@@ -289,9 +285,16 @@ export const assignments: AssignmentSource = {
 	async submit(course, id, submission, { comment }) {
 		const endpoint = `courses/${course.canvas_id}/assignments/${id}/submissions`;
 
+		const topic = submission.type == 'text' && (await assignmentDiscussion(course, Number(id)));
+		if (topic) {
+			if (comment) throw new Error('Comments are not supported for discussion posts');
+			await postEntry(course, topic.id, toHTML(submission.text));
+			return;
+		}
+
 		const body =
 			submission.type == 'text'
-				? { submission_type: 'online_text_entry', body: textToHTML(submission.text) }
+				? { submission_type: 'online_text_entry', body: toHTML(submission.text) }
 				: submission.type == 'url'
 					? { submission_type: 'online_url', url: submission.url }
 					: {
@@ -326,6 +329,21 @@ export function getDiscussion(course: Course, topic: number): Promise<types.Disc
 	return api('GET', topicEndpoint(course, topic));
 }
 
+/** Find a topic by searching `courses` */
+export async function findDiscussion(
+	topic: number,
+	courses: Course[]
+): Promise<{ course: Course; topic: types.DiscussionTopic } | undefined> {
+	for (const course of courses) {
+		if (course.canvas_id === undefined) continue;
+		try {
+			return { course, topic: await getDiscussion(course, topic) };
+		} catch (e) {
+			if (!(e instanceof RequestError) || e.status != 404) throw e;
+		}
+	}
+}
+
 /** The topic of a discussion assignment, or undefined for other assignments */
 export async function assignmentDiscussion(course: Course, assignment: number): Promise<types.DiscussionTopic | undefined> {
 	const { discussion_topic } = await api<types.Assignment>('GET', `courses/${course.canvas_id}/assignments/${assignment}`);
@@ -342,9 +360,27 @@ async function readEntries<T>(fetchEntries: Promise<T>): Promise<T> {
 	}
 }
 
-/** Every entry of a topic with replies nested, and the participants who wrote them */
-export function viewDiscussion(course: Course, topic: number): Promise<types.DiscussionView> {
-	return readEntries(api('GET', topicEndpoint(course, topic) + '/view'));
+/** Every entry of a topic with replies nested, including `new_entries`, and the participants who wrote them */
+export async function viewDiscussion(course: Course, topic: number): Promise<types.DiscussionView> {
+	const view = await readEntries(api<types.DiscussionView>('GET', topicEndpoint(course, topic) + '/view'));
+
+	const entries = new Map<number, types.DiscussionViewEntry>();
+	const index = (list: types.DiscussionViewEntry[]) => {
+		for (const entry of list) {
+			entries.set(entry.id, entry);
+			index(entry.replies ?? []);
+		}
+	};
+	index(view.view);
+
+	for (const entry of view.new_entries ?? []) {
+		if (entries.has(entry.id)) continue;
+		entries.set(entry.id, entry);
+		const parent = entry.parent_id === null ? undefined : entries.get(entry.parent_id);
+		(parent ? (parent.replies ??= []) : view.view).push(entry);
+	}
+
+	return view;
 }
 
 /** Top-level entries, newest first */
@@ -367,7 +403,7 @@ async function postMessage(endpoint: string, message: string, attachment?: strin
 
 /**
  * Post a top-level entry.
- * @param message HTML, see {@link textToHTML}
+ * @param message HTML, see {@link toHTML}
  * @param attachment Path of a file to attach
  */
 export function postEntry(course: Course, topic: number, message: string, attachment?: string): Promise<types.DiscussionEntry> {
@@ -376,7 +412,7 @@ export function postEntry(course: Course, topic: number, message: string, attach
 
 /**
  * Reply to an entry.
- * @param message HTML, see {@link textToHTML}
+ * @param message HTML, see {@link toHTML}
  * @param attachment Path of a file to attach
  */
 export function replyToEntry(
@@ -389,7 +425,7 @@ export function replyToEntry(
 	return postMessage(topicEndpoint(course, topic) + `/entries/${entry}/replies`, message, attachment);
 }
 
-/** @param message HTML, see {@link textToHTML} */
+/** @param message HTML, see {@link toHTML} */
 export function editEntry(course: Course, topic: number, entry: number, message: string): Promise<types.DiscussionEntry> {
 	return api('PUT', topicEndpoint(course, topic) + `/entries/${entry}`, { message });
 }

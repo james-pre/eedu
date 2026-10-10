@@ -1,18 +1,19 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
-import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import { debugMode } from './config.js';
-import { school, type Course } from './data.js';
+import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as qemu from './platforms/qemu.js';
 import * as zybooks from './platforms/zybooks.js';
 import * as grades from './grades.js';
+import type * as canvasTypes from './platforms/canvas.types.js';
+import { htmlToText, readText, textFormats, toHTML, type Text } from './text.js';
 
 const cli = new Command('eedu').version($pkg.version).description($pkg.description);
 
@@ -444,8 +445,10 @@ function parseDate(value: string): Date {
 	return date;
 }
 
-const dueText = (a: assignments.Assignment) =>
-	a.due?.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) ?? '';
+const shortDate = (date: Date | string) =>
+	new Date(date).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+const dueText = (a: assignments.Assignment) => (a.due ? shortDate(a.due) : '');
 
 function dueColor(a: assignments.Assignment): InspectColor | 'reset' {
 	if (!a.due || a.status != 'unsubmitted') return 'reset';
@@ -530,17 +533,16 @@ async function resolveAssignment(
 const assignmentIdHelp = 'Assignment ID, as shown by `eedu assignments list` (prompted for if omitted)';
 const courseOptionHelp = 'Course ID or name, supports partial matches and is case insensitive';
 
-const htmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", nbsp: ' ' };
+const textOption = () => new Option('-t, --text <text>', 'Text to submit');
+const textFileOption = () => new Option('-T, --text-file <path>', 'Submit the contents of a text file, or standard input if "-"');
+const formatOption = () =>
+	new Option('-F, --format <format>', 'Format of the text, by default from the file extension or plain text').choices(textFormats);
 
-function htmlToText(html: string): string {
-	return html
-		.replace(/<br\s*\/?>/gi, '\n')
-		.replace(/<\/(p|div|li|h\d)>/gi, '\n')
-		.replace(/<li[^>]*>/gi, '- ')
-		.replace(/<[^>]+>/g, '')
-		.replace(/&(\w+|#\d+);/g, (entity, name) => htmlEntities[name] ?? entity)
-		.replace(/\n{3,}/g, '\n\n')
-		.trim();
+/** The text from `--text` or `--text-file`, if either is given */
+function textInput(options: { text?: string; textFile?: string; format?: Text['format'] }): Text | undefined {
+	if (options.text !== undefined && options.textFile !== undefined) throw new Error('Only one of --text or --text-file can be used');
+	if (options.text !== undefined) return { content: options.text, format: options.format ?? 'text' };
+	if (options.textFile !== undefined) return readText(options.textFile, options.format);
 }
 
 cli_assignments
@@ -571,28 +573,186 @@ cli_assignments
 	.description('Submit to an assignment')
 	.argument('[id]', assignmentIdHelp)
 	.option('-c, --course <course>', courseOptionHelp)
-	.option('-t, --text <text>', 'Submit text')
-	.option('-T, --text-file <path>', 'Submit the contents of a text file')
+	.addOption(textOption())
+	.addOption(textFileOption())
+	.addOption(formatOption())
 	.option('-u, --url <url>', 'Submit a URL')
 	.option('-f, --file <paths...>', 'Submit files')
 	.option('-m, --comment <text>', 'Add a comment to the submission')
 	.option('-y, --no-confirm', 'Do not ask for confirmation')
 	.action(async (id, options) => {
-		const given = [options.text, options.textFile, options.url, options.file].filter(x => x !== undefined);
+		const text = textInput(options);
+		const given = [text, options.url, options.file].filter(x => x !== undefined);
 		if (given.length != 1) throw new Error('Exactly one of --text, --text-file, --url, or --file is required');
 
-		const submission: assignments.Submission =
-			options.text !== undefined
-				? { type: 'text', text: options.text }
-				: options.textFile !== undefined
-					? { type: 'text', text: readFileSync(options.textFile, 'utf8') }
-					: options.url !== undefined
-						? { type: 'url', url: options.url }
-						: { type: 'file', paths: options.file! };
+		const submission: assignments.Submission = text
+			? { type: 'text', text }
+			: options.url !== undefined
+				? { type: 'url', url: options.url }
+				: { type: 'file', paths: options.file! };
 
 		const a = await resolveAssignment(id, options.course, { status: ['unsubmitted'], submittable: true });
 		assignments.checkSubmission(a, submission);
 		if (options.confirm) await io.assertYes(`Submit ${submission.type} to ${a.name} in ${a.course.name}`);
 		await assignments.submit(assignmentSources, a, submission, { comment: options.comment });
 		console.log(styleText('green', 'Submitted'), a.name);
+	});
+
+const cli_discussions = cli.command('discussions').alias('disc').description('Read and post in Canvas discussions');
+
+function parseId(value: string): number {
+	const id = Number(value.replace(/^#/, ''));
+	if (!Number.isSafeInteger(id) || id <= 0) throw new InvalidArgumentError('Expected a numeric ID');
+	return id;
+}
+
+interface DiscussionRow {
+	course: Course;
+	topic: canvasTypes.DiscussionTopic;
+}
+
+async function listTopics(courses: Course[], options: canvas.DiscussionListOptions & { open?: boolean } = {}): Promise<DiscussionRow[]> {
+	const rows: DiscussionRow[] = [];
+	for (const course of courses) {
+		if (course.canvas_id === undefined) continue;
+		for (const topic of await canvas.listDiscussions(course, options)) {
+			if (!options.open || !topic.locked_for_user) rows.push({ course, topic });
+		}
+	}
+	return rows;
+}
+
+function topicStatus(topic: canvasTypes.DiscussionTopic): string {
+	const text = [
+		topic.unread_count && styleText('cyan', `${topic.unread_count} unread`),
+		!topic.user_can_see_posts && topic.require_initial_post && styleText('yellow', 'post first'),
+		topic.locked_for_user && styleText('dim', 'locked'),
+	];
+	return text.filter(x => x).join(', ');
+}
+
+/** The topic with `id`, or the one the user picks when it's omitted */
+async function resolveDiscussion(id: number | undefined, courseQuery: string | undefined, open: boolean = false): Promise<DiscussionRow> {
+	const courses = courseQuery ? [grades.findCourse(courseQuery)] : matchCourses();
+
+	if (id !== undefined) {
+		const found = await canvas.findDiscussion(id, courses);
+		if (!found) throw new Error('No discussion with ID ' + id);
+		return found;
+	}
+
+	const choices = await listTopics(courses, { open });
+	if (!choices.length) throw new Error('No discussions to choose from');
+	return await io.select(
+		'Discussion',
+		choices.map(row => ({ name: `${row.topic.title} (${row.course.name})`, value: row }))
+	);
+}
+
+const topicIdHelp = 'Discussion ID, as shown by `eedu discussions list` (prompted for if omitted)';
+
+cli_discussions
+	.command('list')
+	.alias('ls')
+	.description('List discussions')
+	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
+	.option('-s, --search <text>', 'Only discussions whose title contains this')
+	.option('-u, --unread', 'Only discussions with unread entries', false)
+	.option('-o, --open', 'Only discussions that are not locked', false)
+	.action(async ({ course, allTerms, ...options }) => {
+		const rows = await listTopics(matchCourses(course, allTerms), options);
+		if (!rows.length) {
+			console.log('No discussions.');
+			return;
+		}
+
+		io.table(
+			[
+				{ name: 'ID', text: r => r.topic.id },
+				{ name: 'Course', text: r => r.course.name },
+				{ name: 'Title', text: r => r.topic.title },
+				{ name: 'Entries', text: r => r.topic.discussion_subentry_count, padStart: true },
+				{ name: 'Last reply', text: r => (r.topic.last_reply_at ? shortDate(r.topic.last_reply_at) : '') },
+				{ name: 'Status', text: r => topicStatus(r.topic), grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			rows
+		);
+	});
+
+cli_discussions
+	.command('read')
+	.description('Show a discussion and its entries')
+	.argument('[id]', topicIdHelp, parseId)
+	.option('-c, --course <course>', courseOptionHelp)
+	.option('-r, --mark-read', 'Mark the discussion and its entries as read', false)
+	.action(async (id, options) => {
+		const { course, topic } = await resolveDiscussion(id, options.course);
+
+		console.log(styleText('bold', `--- ${topic.title} (${course.name}) ---`));
+		console.log(
+			styleText('dim', [topic.user_name, topic.posted_at && shortDate(topic.posted_at), topicStatus(topic)].filter(x => x).join(', '))
+		);
+		console.log('\n' + htmlToText(topic.message) + '\n');
+
+		let view: canvasTypes.DiscussionView;
+		try {
+			view = await canvas.viewDiscussion(course, topic.id);
+		} catch (e) {
+			if (!(e instanceof canvas.RequestError) || e.status != 403) throw e;
+			console.log(styleText('yellow', e.message));
+			return;
+		}
+
+		const names = new Map(view.participants.map(p => [p.id, p.display_name]));
+		const unread = new Set(view.unread_entries);
+
+		const printEntry = (entry: canvasTypes.DiscussionViewEntry, depth: number) => {
+			const indent = '    '.repeat(depth);
+			if (entry.deleted) console.log(indent + styleText('dim', 'Deleted entry'));
+			else {
+				const author = styleText('bold', names.get(entry.user_id) ?? 'Unknown');
+				const meta = styleText('dim', `${shortDate(entry.created_at)} #${entry.id}`);
+				console.log(indent + [author, meta, unread.has(entry.id) && styleText('cyan', 'new')].filter(x => x).join(' '));
+				for (const line of htmlToText(entry.message ?? '').split('\n')) console.log(indent + '  ' + line);
+			}
+			console.log();
+			for (const reply of entry.replies ?? []) printEntry(reply, depth + 1);
+		};
+
+		for (const entry of view.view) printEntry(entry, 0);
+		if (!view.view.length) console.log(styleText('dim', 'No entries.'));
+
+		if (options.markRead) await canvas.markRead(course, topic.id);
+	});
+
+cli_discussions
+	.command('post')
+	.description('Post in a discussion, or reply to an entry')
+	.argument('[id]', topicIdHelp, parseId)
+	.option('-c, --course <course>', courseOptionHelp)
+	.option('-r, --reply-to <entry>', 'ID of an entry to reply to, as shown by `eedu discussions read`', parseId)
+	.addOption(textOption())
+	.addOption(textFileOption())
+	.addOption(formatOption())
+	.option('-A, --attach <path>', 'Attach a file')
+	.option('-y, --no-confirm', 'Do not ask for confirmation')
+	.action(async (id, options) => {
+		const text = textInput(options);
+		if (!text) throw new Error('One of --text or --text-file is required');
+
+		const { course, topic } = await resolveDiscussion(id, options.course, true);
+		if (topic.locked_for_user) throw new Error(topic.title + ' is locked');
+		if (options.attach && !topic.permissions.attach) throw new Error(topic.title + ' does not allow attachments');
+
+		const target = options.replyTo === undefined ? topic.title : `#${options.replyTo} in ${topic.title}`;
+		if (options.confirm) await io.assertYes(`${options.replyTo === undefined ? 'Post in' : 'Reply to'} ${target} (${course.name})`);
+
+		const message = toHTML(text);
+		const entry =
+			options.replyTo === undefined
+				? await canvas.postEntry(course, topic.id, message, options.attach)
+				: await canvas.replyToEntry(course, topic.id, options.replyTo, message, options.attach);
+		console.log(styleText('green', 'Posted'), '#' + entry.id);
 	});

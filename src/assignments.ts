@@ -1,11 +1,9 @@
 import { extname } from 'node:path';
-import { inProgress, school, type Course } from './data.js';
+import { matchCourses, school, type Course } from './data.js';
 import { findItem } from './grades.js';
+import type { Text } from './text.js';
 
 export type SubmissionType = 'text' | 'url' | 'file' | 'external' | 'quiz' | 'discussion' | 'media' | 'annotation' | 'paper' | 'none';
-
-/** Submission types that can be submitted with eedu */
-export const submittableTypes = ['text', 'url', 'file'] as const satisfies SubmissionType[];
 
 export type Status = 'unsubmitted' | 'submitted' | 'graded';
 
@@ -38,7 +36,17 @@ export interface Assignment extends Omit<PulledAssignment, 'id'> {
 	course: Course;
 }
 
-export type Submission = { type: 'text'; text: string } | { type: 'url'; url: string } | { type: 'file'; paths: string[] };
+export type Submission = { type: 'text'; text: Text } | { type: 'url'; url: string } | { type: 'file'; paths: string[] };
+
+/** The submission types that accept each kind of submission */
+const accepts: Record<Submission['type'], SubmissionType[]> = {
+	text: ['text', 'discussion'],
+	url: ['url'],
+	file: ['file'],
+};
+
+/** Submission types that can be submitted with eedu */
+export const submittableTypes: SubmissionType[] = Object.values(accepts).flat();
 
 export interface SubmitOptions {
 	comment?: string;
@@ -107,16 +115,11 @@ export function matches(assignment: Assignment, filter: AssignmentFilter): boole
 	return true;
 }
 
-/** Courses whose ID or name contains `query` (case-insensitive), only those in progress unless `allTerms` is set */
-function filterCourses(query?: string, allTerms: boolean = false): Course[] {
-	return school.data.courses.filter(c => (!query || contains(c.id, query) || contains(c.name, query)) && (allTerms || inProgress(c)));
-}
-
 /** Assignments matching `filter`, sorted by due date with undated ones last */
 export async function listAssignments(sources: AssignmentSource[], filter: AssignmentFilter = {}): Promise<Assignment[]> {
 	const results: Assignment[] = [];
 
-	for (const course of filterCourses(filter.course, filter.allTerms)) {
+	for (const course of matchCourses(filter.course, filter.allTerms)) {
 		for (const source of sources) {
 			if (!source.has(course)) continue;
 			for (const pulled of await source.list(course)) {
@@ -144,7 +147,7 @@ export async function getAssignment(sources: AssignmentSource[], id: string, cou
 	const { source, localId } = sourceOf(sources, id);
 
 	const gradeCourse = school.data.courses.find(c => c.id == findItem(id)?.course);
-	const candidates = course ? [course] : gradeCourse ? [gradeCourse] : filterCourses();
+	const candidates = course ? [course] : gradeCourse ? [gradeCourse] : matchCourses();
 
 	for (const course of candidates) {
 		if (!source.has(course)) continue;
@@ -156,14 +159,14 @@ export async function getAssignment(sources: AssignmentSource[], id: string, cou
 }
 
 export function canSubmit(assignment: Assignment, type?: Submission['type']): boolean {
-	return type ? assignment.types.includes(type) : submittableTypes.some(t => assignment.types.includes(t));
+	return (type ? accepts[type] : submittableTypes).some(t => assignment.types.includes(t));
 }
 
 /** Throws if the assignment does not accept the submission. */
 export function checkSubmission(assignment: Assignment, submission: Submission) {
 	if (assignment.locked) throw new Error(assignment.name + ' is locked');
 	if (!canSubmit(assignment, submission.type)) {
-		const allowed = assignment.types.filter(t => (submittableTypes as readonly SubmissionType[]).includes(t));
+		const allowed = (Object.keys(accepts) as Submission['type'][]).filter(type => canSubmit(assignment, type));
 		throw new Error(
 			`${assignment.name} does not accept ${submission.type} submissions`
 				+ (allowed.length ? ', it accepts: ' + allowed.join(', ') : '')
