@@ -2,8 +2,10 @@ import * as z from 'zod';
 import $pkg from '../../package.json' with { type: 'json' };
 import { Manager } from '@james-pre/config';
 import * as io from 'ioium/node';
-import { join } from 'node:path';
-import { dataDir, school } from '../data.js';
+import { openAsBlob } from 'node:fs';
+import { basename, join } from 'node:path';
+import type { AssignmentSource, PulledAssignment, SubmissionType } from '../assignments.js';
+import { dataDir, school, type Course } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import type { GradeSource } from '../grades.js';
 import { discover as discoverZybooks } from './zybooks.js';
@@ -30,6 +32,15 @@ export class TokenError extends Error {
 	}
 }
 
+export class RequestError extends Error {
+	constructor(
+		message: string,
+		public readonly status: number
+	) {
+		super(message);
+	}
+}
+
 async function request(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}) {
 	if (!data.origin || !data.token) throw new Error('Canvas is not set up, run `eedu discover canvas`');
 
@@ -51,7 +62,7 @@ async function request(method: string, endpoint: string, body?: any, headers: Re
 
 	if (!response.ok) {
 		const [{ message } = {}] = json.errors || [];
-		throw new Error(message ?? `${method} ${endpoint} failed: ` + response.statusText);
+		throw new RequestError(message ?? `${method} ${endpoint} failed: ` + response.statusText, response.status);
 	}
 
 	return { response, json };
@@ -157,14 +168,16 @@ interface AssignmentGroup extends Omit<types.AssignmentGroup, 'assignments'> {
 	assignments: types.Assignment[];
 }
 
+function assignmentGroups(course: Course): Promise<AssignmentGroup[]> {
+	return apiAll<AssignmentGroup>(`courses/${course.canvas_id}/assignment_groups?include[]=assignments&include[]=submission`);
+}
+
 export const grades: GradeSource = {
 	name: 'canvas',
 	has: course => course.canvas_id !== undefined,
 	async pull(course) {
 		const { apply_assignment_group_weights } = await api<types.Course>('GET', `courses/${course.canvas_id}`);
-		const groups = await apiAll<AssignmentGroup>(
-			`courses/${course.canvas_id}/assignment_groups?include[]=assignments&include[]=submission`
-		);
+		const groups = await assignmentGroups(course);
 
 		return groups.map(group => ({
 			name: group.name,
@@ -174,5 +187,109 @@ export const grades: GradeSource = {
 				.filter(a => !a.omit_from_final_grade && a.grading_type != 'not_graded' && !a.submission?.excused)
 				.map(a => ({ id: String(a.id), name: a.name, score: a.submission?.score ?? null, possible: a.points_possible ?? 0 })),
 		}));
+	},
+};
+
+const submissionTypes: Record<types.Assignment['submission_types'][number], SubmissionType> = {
+	online_text_entry: 'text',
+	online_url: 'url',
+	online_upload: 'file',
+	external_tool: 'external',
+	online_quiz: 'quiz',
+	discussion_topic: 'discussion',
+	media_recording: 'media',
+	student_annotation: 'annotation',
+	on_paper: 'paper',
+	none: 'none',
+	not_graded: 'none',
+};
+
+const date = (value?: string | null) => (value ? new Date(value) : undefined);
+
+function toPulled(assignment: types.Assignment, category?: string): PulledAssignment {
+	const { submission } = assignment;
+	const state = submission?.workflow_state;
+	return {
+		id: String(assignment.id),
+		name: assignment.name,
+		category,
+		description: assignment.description || undefined,
+		due: date(assignment.due_at),
+		unlock: date(assignment.unlock_at),
+		lock: date(assignment.lock_at),
+		locked: assignment.locked_for_user,
+		possible: assignment.points_possible ?? 0,
+		score: submission?.score ?? null,
+		status: state == 'graded' ? 'graded' : state == 'submitted' || state == 'pending_review' ? 'submitted' : 'unsubmitted',
+		late: !!submission?.late,
+		missing: !!submission?.missing,
+		types: [...new Set(assignment.submission_types.map(t => submissionTypes[t]))],
+		extensions: assignment.allowed_extensions?.length ? assignment.allowed_extensions : undefined,
+		url: assignment.html_url,
+	};
+}
+
+interface UploadTarget {
+	upload_url: string;
+	upload_params: Record<string, string>;
+}
+
+/**
+ * Upload a file using Canvas' file upload process.
+ * @returns The ID of the uploaded file
+ */
+async function upload(endpoint: string, path: string): Promise<number> {
+	const file = await openAsBlob(path);
+	const name = basename(path);
+	const { upload_url, upload_params } = await api<UploadTarget>('POST', endpoint, { name, size: file.size });
+
+	const form = new FormData();
+	for (const [key, value] of Object.entries(upload_params)) form.append(key, value);
+	form.append('file', file, name);
+
+	const response = await fetch(upload_url, { method: 'POST', body: form, redirect: 'manual' });
+	const location = response.headers.get('Location');
+	if (location && (response.status == 201 || (response.status >= 300 && response.status < 400)))
+		return (await api<{ id: number }>('GET', location)).id;
+	if (!response.ok) throw new Error(`Uploading ${name} failed: ` + response.statusText);
+	return ((await response.json()) as { id: number }).id;
+}
+
+const escapeHTML = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+export const assignments: AssignmentSource = {
+	name: 'canvas',
+	has: course => course.canvas_id !== undefined,
+	async list(course) {
+		const groups = await assignmentGroups(course);
+		return groups.flatMap(group => group.assignments.map(a => toPulled(a, group.name)));
+	},
+	async get(course, id) {
+		try {
+			const assignment = await api<types.Assignment>('GET', `courses/${course.canvas_id}/assignments/${id}?include[]=submission`);
+			const group = await api<types.AssignmentGroup>(
+				'GET',
+				`courses/${course.canvas_id}/assignment_groups/${assignment.assignment_group_id}`
+			);
+			return toPulled(assignment, group.name);
+		} catch (e) {
+			if (e instanceof RequestError && e.status == 404) return;
+			throw e;
+		}
+	},
+	async submit(course, id, submission, { comment }) {
+		const endpoint = `courses/${course.canvas_id}/assignments/${id}/submissions`;
+
+		const body =
+			submission.type == 'text'
+				? { submission_type: 'online_text_entry', body: escapeHTML(submission.text).replace(/\r?\n/g, '<br>') }
+				: submission.type == 'url'
+					? { submission_type: 'online_url', url: submission.url }
+					: {
+							submission_type: 'online_upload',
+							file_ids: await Promise.all(submission.paths.map(path => upload(endpoint + '/self/files', path))),
+						};
+
+		await api('POST', endpoint, { submission: body, ...(comment && { comment: { text_comment: comment } }) });
 	},
 };

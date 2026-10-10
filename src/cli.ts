@@ -1,9 +1,11 @@
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
+import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { styleText } from 'node:util';
+import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
+import * as assignments from './assignments.js';
 import { debugMode } from './config.js';
 import { school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
@@ -426,4 +428,170 @@ cli_category
 	.action(async function cli_category_remove(name) {
 		const course = await categoryCourse(this);
 		grades.removeCategory(course.id, grades.findCategory(course, name));
+	});
+
+const cli_assignments = cli.command('assignments').aliases(['asgn', 'ass']).description('View and submit assignments');
+
+const assignmentSources = [canvas.assignments];
+
+/** A date, or a time relative to now like 3d, -1w, or 12h */
+function parseDate(value: string): Date {
+	const relative = value.match(/^([+-]?\d+)([hdw])$/);
+	if (relative)
+		return new Date(Date.now() + Number(relative[1]) * { h: 3600e3, d: 86400e3, w: 604800e3 }[relative[2] as 'h' | 'd' | 'w']);
+	const date = new Date(value);
+	if (isNaN(date.getTime())) throw new InvalidArgumentError('Expected a date or a relative time like 3d or 1w');
+	return date;
+}
+
+const dueText = (a: assignments.Assignment) =>
+	a.due?.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) ?? '';
+
+function dueColor(a: assignments.Assignment): InspectColor | 'reset' {
+	if (!a.due || a.status != 'unsubmitted') return 'reset';
+	if (a.due.getTime() < Date.now()) return 'redBright';
+	return a.due.getTime() - Date.now() < 2 * 86400e3 ? 'yellow' : 'reset';
+}
+
+function assignmentStatus(a: assignments.Assignment): string {
+	const text = [
+		a.status == 'graded' ? styleText('green', 'graded') : a.status == 'submitted' ? styleText('cyan', 'submitted') : '',
+		a.missing && styleText('redBright', 'missing'),
+		a.late && styleText('yellow', 'late'),
+		a.locked && styleText('dim', 'locked'),
+	];
+	return text.filter(x => x).join(', ');
+}
+
+cli_assignments
+	.command('list')
+	.alias('ls')
+	.description('List assignments, by default those due up to 2 weeks from now')
+	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
+	.option('-C, --category <category>', 'Only categories whose name contains this (case insensitive)')
+	.option('--since <date>', 'Only assignments due at or after this date, or a relative time like -1w', parseDate)
+	.option('--until <date>', 'Only assignments due at or before this date, or a relative time like 3d', parseDate)
+	.option('--no-until', 'Include assignments due any time in the future')
+	.option('--no-undated', 'Exclude assignments without a due date')
+	.addOption(
+		new Option('-s, --status <status...>', 'Only assignments with these statuses').choices([
+			'unsubmitted',
+			'submitted',
+			'graded',
+		] as const)
+	)
+	.option('-S, --submittable', 'Only assignments that can be submitted with eedu', false)
+	.action(async ({ since, until, ...options }) => {
+		const rows = await assignments.listAssignments(assignmentSources, {
+			...options,
+			after: since,
+			before: until === false ? null : until,
+		});
+
+		if (!rows.length) {
+			console.log('No assignments.');
+			return;
+		}
+
+		io.table(
+			[
+				{ name: 'ID', text: a => a.id },
+				{ name: 'Course', text: a => a.course.name },
+				{ name: 'Category', text: a => a.category ?? '' },
+				{ name: 'Name', text: a => a.name },
+				{ name: 'Due', text: a => styleText(dueColor(a), dueText(a)) },
+				{ name: 'Score', text: a => (a.possible ? `${a.score ?? '?'}/${a.possible}` : ''), padStart: true },
+				{ name: 'Status', text: assignmentStatus, grow: 0 },
+			],
+			{ formatHead: text => styleText('bold', text) },
+			rows
+		);
+	});
+
+/** The assignment with `id`, or the one the user picks from those matching `filter` when it's omitted */
+async function resolveAssignment(
+	id: string | undefined,
+	courseQuery: string | undefined,
+	filter: assignments.AssignmentFilter = {}
+): Promise<assignments.Assignment> {
+	const course = courseQuery ? grades.findCourse(courseQuery) : undefined;
+	if (id) return await assignments.getAssignment(assignmentSources, id, course);
+
+	const choices = await assignments.listAssignments(assignmentSources, { ...filter, course: course?.id });
+	if (!choices.length) throw new Error('No assignments to choose from');
+	return await io.select(
+		'Assignment',
+		choices.map(a => ({ name: `${a.name} (${a.course.name}${a.due ? ', due ' + dueText(a) : ''})`, value: a }))
+	);
+}
+
+const assignmentIdHelp = 'Assignment ID, as shown by `eedu assignments list` (prompted for if omitted)';
+const courseOptionHelp = 'Course ID or name, supports partial matches and is case insensitive';
+
+const htmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", nbsp: ' ' };
+
+function htmlToText(html: string): string {
+	return html
+		.replace(/<br\s*\/?>/gi, '\n')
+		.replace(/<\/(p|div|li|h\d)>/gi, '\n')
+		.replace(/<li[^>]*>/gi, '- ')
+		.replace(/<[^>]+>/g, '')
+		.replace(/&(\w+|#\d+);/g, (entity, name) => htmlEntities[name] ?? entity)
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
+}
+
+cli_assignments
+	.command('info')
+	.description('Show an assignment')
+	.argument('[id]', assignmentIdHelp)
+	.option('-c, --course <course>', courseOptionHelp)
+	.action(async (id, options) => {
+		const a = await resolveAssignment(id, options.course);
+		const out = (key: string, value?: string | false) => value && console.log(styleText('whiteBright', key + ':'), value);
+		const time = (date?: Date) => date?.toLocaleString();
+
+		console.log(styleText('bold', `--- ${a.name} (${a.course.name}) ---`));
+		out('ID', a.id);
+		out('Category', a.category);
+		out('Due', a.due && styleText(dueColor(a), dueText(a)));
+		out('Available', a.unlock && time(a.unlock));
+		out('Until', a.lock && time(a.lock));
+		out('Points', a.possible ? `${a.score ?? '?'}/${a.possible}` : '');
+		out('Status', assignmentStatus(a) || 'unsubmitted');
+		out('Submission', a.types.join(', ') + (a.extensions ? ` (${a.extensions.join(', ')})` : ''));
+		out('URL', a.url);
+		if (a.description) console.log('\n' + htmlToText(a.description));
+	});
+
+cli_assignments
+	.command('submit')
+	.description('Submit to an assignment')
+	.argument('[id]', assignmentIdHelp)
+	.option('-c, --course <course>', courseOptionHelp)
+	.option('-t, --text <text>', 'Submit text')
+	.option('-T, --text-file <path>', 'Submit the contents of a text file')
+	.option('-u, --url <url>', 'Submit a URL')
+	.option('-f, --file <paths...>', 'Submit files')
+	.option('-m, --comment <text>', 'Add a comment to the submission')
+	.option('-y, --no-confirm', 'Do not ask for confirmation')
+	.action(async (id, options) => {
+		const given = [options.text, options.textFile, options.url, options.file].filter(x => x !== undefined);
+		if (given.length != 1) throw new Error('Exactly one of --text, --text-file, --url, or --file is required');
+
+		const submission: assignments.Submission =
+			options.text !== undefined
+				? { type: 'text', text: options.text }
+				: options.textFile !== undefined
+					? { type: 'text', text: readFileSync(options.textFile, 'utf8') }
+					: options.url !== undefined
+						? { type: 'url', url: options.url }
+						: { type: 'file', paths: options.file! };
+
+		const a = await resolveAssignment(id, options.course, { status: ['unsubmitted'], submittable: true });
+		assignments.checkSubmission(a, submission);
+		if (options.confirm) await io.assertYes(`Submit ${submission.type} to ${a.name} in ${a.course.name}`);
+		await assignments.submit(assignmentSources, a, submission, { comment: options.comment });
+		console.log(styleText('green', 'Submitted'), a.name);
 	});

@@ -261,6 +261,10 @@ export interface Submission {
 	grade: string | null;
 	excused: boolean;
 	workflow_state: 'submitted' | 'unsubmitted' | 'graded' | 'pending_review';
+	submitted_at: string | null;
+	attempt: number | null;
+	late: boolean;
+	missing: boolean;
 }
 
 export interface AssignmentDate {
