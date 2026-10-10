@@ -47,18 +47,24 @@ async function request(method: string, endpoint: string, body?: any, headers: Re
 	const url = new URL(endpoint, data.origin + '/api/v1/');
 	const response = await fetch(url, {
 		method,
-		body: method == 'GET' || method == 'HEAD' ? null : JSON.stringify(body),
+		body: method == 'GET' || method == 'HEAD' ? null : body instanceof FormData ? body : JSON.stringify(body),
 		headers: {
 			Authorization: `Bearer ${data.token}`,
 			'User-Agent': `Mozilla/5.0 (compatible; eedu/${$pkg.version})`,
-			'Content-Type': 'application/json',
+			...(!(body instanceof FormData) && { 'Content-Type': 'application/json' }),
 			...headers,
 		},
 	});
 
 	if (response.status == 401 && response.headers.has('WWW-Authenticate')) throw new TokenError();
 
-	const json: any = await response.json().catch(() => ({ errors: [{ message: response.statusText }] }));
+	const text = await response.text();
+	let json: any;
+	try {
+		json = JSON.parse(text);
+	} catch {
+		json = { errors: [{ message: text || response.statusText }] };
+	}
 
 	if (!response.ok) {
 		const [{ message } = {}] = json.errors || [];
@@ -255,7 +261,10 @@ async function upload(endpoint: string, path: string): Promise<number> {
 	return ((await response.json()) as { id: number }).id;
 }
 
-const escapeHTML = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** Plain text as HTML that displays the same */
+export function textToHTML(text: string): string {
+	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>');
+}
 
 export const assignments: AssignmentSource = {
 	name: 'canvas',
@@ -282,7 +291,7 @@ export const assignments: AssignmentSource = {
 
 		const body =
 			submission.type == 'text'
-				? { submission_type: 'online_text_entry', body: escapeHTML(submission.text).replace(/\r?\n/g, '<br>') }
+				? { submission_type: 'online_text_entry', body: textToHTML(submission.text) }
 				: submission.type == 'url'
 					? { submission_type: 'online_url', url: submission.url }
 					: {
@@ -293,3 +302,103 @@ export const assignments: AssignmentSource = {
 		await api('POST', endpoint, { submission: body, ...(comment && { comment: { text_comment: comment } }) });
 	},
 };
+
+const topicEndpoint = (course: Course, topic: number) => `courses/${course.canvas_id}/discussion_topics/${topic}`;
+
+export interface DiscussionListOptions {
+	/** Only topics whose title contains this */
+	search?: string;
+	/** Only topics with unread entries */
+	unread?: boolean;
+	/** Only announcements instead of only discussions */
+	announcements?: boolean;
+}
+
+export function listDiscussions(course: Course, options: DiscussionListOptions = {}): Promise<types.DiscussionTopic[]> {
+	const params = new URLSearchParams();
+	if (options.search) params.set('search_term', options.search);
+	if (options.unread) params.set('filter_by', 'unread');
+	if (options.announcements) params.set('only_announcements', 'true');
+	return apiAll(`courses/${course.canvas_id}/discussion_topics` + (params.size ? '?' + params : ''));
+}
+
+export function getDiscussion(course: Course, topic: number): Promise<types.DiscussionTopic> {
+	return api('GET', topicEndpoint(course, topic));
+}
+
+/** The topic of a discussion assignment, or undefined for other assignments */
+export async function assignmentDiscussion(course: Course, assignment: number): Promise<types.DiscussionTopic | undefined> {
+	const { discussion_topic } = await api<types.Assignment>('GET', `courses/${course.canvas_id}/assignments/${assignment}`);
+	return discussion_topic;
+}
+
+/** Throws a clearer error when the topic requires posting before seeing other entries, see `user_can_see_posts` */
+async function readEntries<T>(fetchEntries: Promise<T>): Promise<T> {
+	try {
+		return await fetchEntries;
+	} catch (e) {
+		if (!(e instanceof RequestError) || e.message != 'require_initial_post') throw e;
+		throw new RequestError('This discussion requires posting before seeing other entries', e.status);
+	}
+}
+
+/** Every entry of a topic with replies nested, and the participants who wrote them */
+export function viewDiscussion(course: Course, topic: number): Promise<types.DiscussionView> {
+	return readEntries(api('GET', topicEndpoint(course, topic) + '/view'));
+}
+
+/** Top-level entries, newest first */
+export function listEntries(course: Course, topic: number): Promise<types.DiscussionEntry[]> {
+	return readEntries(apiAll(topicEndpoint(course, topic) + '/entries'));
+}
+
+/** Replies to an entry, newest first */
+export function listReplies(course: Course, topic: number, entry: number): Promise<types.DiscussionEntry[]> {
+	return readEntries(apiAll(topicEndpoint(course, topic) + `/entries/${entry}/replies`));
+}
+
+async function postMessage(endpoint: string, message: string, attachment?: string): Promise<types.DiscussionEntry> {
+	if (!attachment) return await api('POST', endpoint, { message });
+	const form = new FormData();
+	form.append('message', message);
+	form.append('attachment', await openAsBlob(attachment), basename(attachment));
+	return await api('POST', endpoint, form);
+}
+
+/**
+ * Post a top-level entry.
+ * @param message HTML, see {@link textToHTML}
+ * @param attachment Path of a file to attach
+ */
+export function postEntry(course: Course, topic: number, message: string, attachment?: string): Promise<types.DiscussionEntry> {
+	return postMessage(topicEndpoint(course, topic) + '/entries', message, attachment);
+}
+
+/**
+ * Reply to an entry.
+ * @param message HTML, see {@link textToHTML}
+ * @param attachment Path of a file to attach
+ */
+export function replyToEntry(
+	course: Course,
+	topic: number,
+	entry: number,
+	message: string,
+	attachment?: string
+): Promise<types.DiscussionEntry> {
+	return postMessage(topicEndpoint(course, topic) + `/entries/${entry}/replies`, message, attachment);
+}
+
+/** @param message HTML, see {@link textToHTML} */
+export function editEntry(course: Course, topic: number, entry: number, message: string): Promise<types.DiscussionEntry> {
+	return api('PUT', topicEndpoint(course, topic) + `/entries/${entry}`, { message });
+}
+
+export async function deleteEntry(course: Course, topic: number, entry: number): Promise<void> {
+	await api('DELETE', topicEndpoint(course, topic) + `/entries/${entry}`);
+}
+
+/** Mark one entry as read, or the topic and all of its entries when `entry` is omitted */
+export async function markRead(course: Course, topic: number, entry?: number): Promise<void> {
+	await api('PUT', topicEndpoint(course, topic) + (entry === undefined ? '/read_all' : `/entries/${entry}/read`));
+}

@@ -341,7 +341,7 @@ export interface Assignment {
 	lock_explanation: string;
 	quiz_id: number;
 	anonymous_submissions: boolean;
-	discussion_topic: unknown;
+	discussion_topic?: DiscussionTopic;
 	freeze_on_copy: boolean;
 	frozen: boolean;
 	frozen_attributes: string[];
@@ -425,4 +425,93 @@ export interface AssignmentOverride {
 	all_day_date: string;
 	unlock_at: string;
 	lock_at: string;
+}
+
+export interface FileAttachment {
+	id: number;
+	display_name: string;
+	filename: string;
+	'content-type': string;
+	url: string;
+	size: number;
+}
+
+export interface DiscussionTopic {
+	id: number;
+	title: string;
+	message: string;
+	html_url: string;
+	posted_at: string;
+	last_reply_at: string | null;
+	require_initial_post: boolean | null;
+	user_can_see_posts: boolean;
+	discussion_subentry_count: number;
+	read_state: 'read' | 'unread';
+	unread_count: number;
+	subscribed: boolean;
+	assignment_id: number | null;
+	delayed_post_at: string | null;
+	published: boolean;
+	lock_at: string | null;
+	locked: boolean;
+	pinned: boolean;
+	locked_for_user: boolean;
+	lock_explanation: string;
+	user_name: string;
+	discussion_type: 'side_comment' | 'threaded' | 'not_threaded';
+	group_category_id: number | null;
+	attachments: FileAttachment[];
+	allow_rating: boolean;
+	only_graders_can_rate: boolean;
+	sort_by_rating: boolean;
+	permissions: { attach: boolean; update: boolean; reply: boolean; delete: boolean };
+}
+
+export interface DiscussionEntry {
+	id: number;
+	user_id: number;
+	editor_id: number | null;
+	user_name: string;
+	message: string;
+	read_state: 'read' | 'unread';
+	forced_read_state: boolean;
+	created_at: string;
+	updated_at: string;
+	attachment: FileAttachment | null;
+	recent_replies?: DiscussionEntry[];
+	has_more_replies?: boolean;
+	parent_id: number | null;
+	rating_count: number | null;
+	rating_sum: number | null;
+}
+
+export interface DiscussionParticipant {
+	id: number;
+	display_name: string;
+	avatar_image_url: string;
+	html_url: string;
+	pronouns: string | null;
+}
+
+export interface DiscussionViewEntry {
+	id: number;
+	user_id: number;
+	parent_id: number | null;
+	created_at: string;
+	updated_at: string;
+	message?: string;
+	deleted?: boolean;
+	rating_count: number | null;
+	rating_sum: number | null;
+	attachment?: FileAttachment;
+	replies?: DiscussionViewEntry[];
+}
+
+export interface DiscussionView {
+	unread_entries: number[];
+	forced_entries: number[];
+	entry_ratings: Record<string, number>;
+	participants: DiscussionParticipant[];
+	view: DiscussionViewEntry[];
+	new_entries: DiscussionViewEntry[];
 }
