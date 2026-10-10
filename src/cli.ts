@@ -482,6 +482,7 @@ cli_assignments
 		] as const)
 	)
 	.option('-S, --submittable', 'Only assignments that can be submitted with eedu', false)
+	.option('-p, --pending', 'Only assignments that are unsubmitted, unlocked, and accept a submission, including missing ones', false)
 	.action(async ({ since, until, ...options }) => {
 		const rows = await assignments.listAssignments(assignmentSources, {
 			...options,

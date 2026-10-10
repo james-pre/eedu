@@ -80,10 +80,17 @@ export interface AssignmentFilter {
 	undated?: boolean;
 	/** Only assignments that can be submitted with eedu */
 	submittable?: boolean;
+	/** Only assignments that are pending, see {@link isPending} */
+	pending?: boolean;
 }
 
 function contains(text: string | undefined, query: string): boolean {
 	return !!text?.toLowerCase().includes(query.toLowerCase());
+}
+
+/** Whether an assignment is unsubmitted, unlocked, and accepts a submission, including missing ones */
+export function isPending(assignment: Assignment): boolean {
+	return assignment.status == 'unsubmitted' && !assignment.locked && assignment.types.some(t => t != 'none');
 }
 
 export function matches(assignment: Assignment, filter: AssignmentFilter): boolean {
@@ -93,6 +100,7 @@ export function matches(assignment: Assignment, filter: AssignmentFilter): boole
 	if (filter.category && !contains(assignment.category, filter.category)) return false;
 	if (filter.status && !filter.status.includes(assignment.status)) return false;
 	if (filter.submittable && (assignment.locked || !canSubmit(assignment))) return false;
+	if (filter.pending && !isPending(assignment)) return false;
 	if (!due) return filter.undated ?? true;
 	if (filter.after && due < filter.after) return false;
 	if (before && due > before) return false;
