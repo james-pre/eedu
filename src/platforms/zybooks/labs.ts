@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import * as z from 'zod';
 import $pkg from '../../../package.json' with { type: 'json' };
 import { firstDifference, languageOf, runTests } from './code.js';
@@ -17,6 +18,19 @@ const labDir = join(dataDir, 'labs');
 const textResult = (text: string, isError: boolean = false) => ({ content: [{ type: 'text' as const, text }], isError });
 
 const readOnly = { annotations: { readOnlyHint: true } };
+
+/** Connect to a VM's screen, retrying while the VM finishes starting, since its VNC server comes up after zyBooks says it is running */
+async function connectWhenReady(url: string, timeout: number = 180_000): Promise<Screen> {
+	const deadline = Date.now() + timeout;
+	for (;;) {
+		try {
+			return await Screen.connect(url);
+		} catch (error) {
+			if (Date.now() > deadline) throw error;
+			await sleep(5000);
+		}
+	}
+}
 
 /** Lab instructions read as prose, since they are written for a web page */
 function plain(text: string): string {
@@ -125,7 +139,7 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 	try {
 		for (const [index, url] of urls.entries()) {
 			status('Connecting to ' + (vms[index]?.title ?? `VM ${index + 1}`));
-			screens.push(await Screen.connect(url));
+			screens.push(await connectWhenReady(url));
 		}
 
 		const tools = [
@@ -215,9 +229,7 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 				'Wait for the VM to catch up, e.g. while an application opens or a command runs',
 				{ seconds: z.number().min(1).max(120) },
 				async ({ seconds }) => {
-					const { promise, resolve } = Promise.withResolvers<void>();
-					setTimeout(resolve, seconds * 1000);
-					await promise;
+					await sleep(seconds * 1000);
 					return textResult(`Waited ${seconds}s`);
 				},
 				readOnly

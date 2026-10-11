@@ -195,20 +195,25 @@ cli_auto
 				onLab: options.labs
 					? async lab => {
 							console.log(`${styleText('green', 'Starting')} ${lab.name}`);
-							const result = await labs.lab(lab, {
-								...agentHandlers(),
-								model: options.model,
-								force: options.force,
-								onStatus: text => io.log(dim(text)),
-							});
-							console.log(
-								styleText(
-									result.points == result.possible ? 'green' : 'yellow',
-									`${result.points}/${result.possible} points`
-								),
-								dim(`estimated cost $${result.cost.toFixed(2)}`)
-							);
-							if (!result.recorded && result.dir) io.warn(`Nothing was submitted. Claude's work is in ${result.dir}`);
+							try {
+								const result = await labs.lab(lab, {
+									...agentHandlers(),
+									model: options.model,
+									force: options.force,
+									onStatus: text => io.log(dim(text)),
+								});
+								if (!result.sessionId) return;
+								console.log(
+									styleText(
+										result.points == result.possible ? 'green' : 'yellow',
+										`${result.points}/${result.possible} points`
+									),
+									dim(`estimated cost $${result.cost.toFixed(2)}`)
+								);
+								if (!result.recorded && result.dir) io.warn(`Nothing was submitted. Claude's work is in ${result.dir}`);
+							} catch (e) {
+								io.error(`${lab.name} failed: ${io.errorText(e)}`);
+							}
 						}
 					: undefined,
 			});
