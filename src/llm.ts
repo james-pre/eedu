@@ -1,4 +1,11 @@
-import { query, type HookCallback, type McpServerConfig, type Options, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+	query,
+	type HookCallback,
+	type HookPermissionDecision,
+	type McpServerConfig,
+	type Options,
+	type SDKResultMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { config } from './config.js';
@@ -83,13 +90,14 @@ export interface AgentOptions {
 	/** Directories and files the agent can also write */
 	writable?: string[];
 	mcpServers?: Record<string, McpServerConfig>;
-	/** Tools that run without approval, e.g. `mcp__eedu__*` */
+	/** Tools that run without approval, by exact name */
 	allowedTools?: string[];
 	/** Tools that always need approval, in addition to Bash */
 	askTools?: string[];
 	model?: string;
 	/** Session to continue */
 	resume?: string;
+	/** Use the SDK's `acceptEdits` permission mode */
 	acceptEdits?: boolean;
 	/** @returns The answer to each question, keyed by question text */
 	answer(questions: Question[]): Promise<Record<string, string>>;
@@ -133,14 +141,33 @@ function toolPaths(tool: string, input: Record<string, unknown>, dir: string): s
 export async function runAgent(text: string, options: AgentOptions): Promise<AgentResult> {
 	const { dir, readable = [], writable = [] } = options;
 	const askTools = ['Bash', ...(options.askTools ?? [])];
+	const allowedTools = ['WebSearch', ...(options.allowedTools ?? [])];
+
+	const decide = (permissionDecision: HookPermissionDecision) => ({
+		hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision },
+	});
 
 	const guard: HookCallback = async input => {
 		if (input.hook_event_name != 'PreToolUse') return {};
-		if (askTools.includes(input.tool_name)) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } };
-		if (!(input.tool_name in fileAccess)) return {};
-		const allowed = fileAccess[input.tool_name] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
-		const inside = toolPaths(input.tool_name, input.tool_input as Record<string, unknown>, dir).every(p => within(p, allowed));
-		return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: inside ? 'allow' : 'ask' } };
+		const { tool_name: tool } = input;
+		if (askTools.includes(tool)) return decide('ask');
+		if (tool in fileAccess) {
+			const allowed = fileAccess[tool] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
+			const inside = toolPaths(tool, input.tool_input as Record<string, unknown>, dir).every(p => within(p, allowed));
+			return decide(inside ? 'allow' : 'ask');
+		}
+		return allowedTools.includes(tool) ? decide('allow') : {};
+	};
+
+	let interaction = Promise.resolve();
+	/** Parallel tool calls can need the user at the same time, so they take turns */
+	const oneAtATime = <T>(interact: () => Promise<T>): Promise<T> => {
+		const result = interaction.then(interact);
+		interaction = result.then(
+			() => {},
+			() => {}
+		);
+		return result;
 	};
 
 	const messages = query({
@@ -153,16 +180,15 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 			plugins: [{ type: 'local', path: pluginDir }],
 			skills: skills(),
 			tools: agentTools,
-			allowedTools: ['WebSearch', ...(options.allowedTools ?? [])],
 			mcpServers: options.mcpServers,
 			permissionMode: options.acceptEdits ? 'acceptEdits' : 'default',
-			hooks: { PreToolUse: [{ matcher: [...Object.keys(fileAccess), ...askTools].join('|'), hooks: [guard] }] },
+			hooks: { PreToolUse: [{ hooks: [guard] }] },
 			async canUseTool(tool, input) {
 				if (tool == 'AskUserQuestion') {
 					const questions = input.questions as Question[];
-					return { behavior: 'allow', updatedInput: { questions, answers: await options.answer(questions) } };
+					return { behavior: 'allow', updatedInput: { questions, answers: await oneAtATime(() => options.answer(questions)) } };
 				}
-				if (await options.approve(tool, input)) return { behavior: 'allow', updatedInput: input };
+				if (await oneAtATime(() => options.approve(tool, input))) return { behavior: 'allow', updatedInput: input };
 				return { behavior: 'deny', message: 'The user did not allow this' };
 			},
 		},

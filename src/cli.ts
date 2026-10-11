@@ -792,15 +792,29 @@ cli_auto
 	.option('-c, --course <course>', courseOptionHelp)
 	.option('-i, --instructions <text>', 'Extra instructions for Claude')
 	.option('-m, --model <model>', 'Claude model to use, by default ' + config.llm)
+	.option('-e, --accept-edits', "Use Claude's accept-edits permission mode", false)
 	.action(async (id, options) => {
 		const a = await resolveAssignment(id, options.course, { pending: true });
 
+		const sessionAllowed = new Set<string>();
+
 		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
 			model: options.model,
+			acceptEdits: options.acceptEdits,
 			answer: answerQuestions,
-			approve(tool, input) {
+			async approve(tool, input) {
+				if (sessionAllowed.has(tool)) return true;
 				console.log(styleText('dim', JSON.stringify(input, null, '\t')));
-				return io.confirm(`Allow ${toolSummary(tool, input)}?`, false);
+				const question = `Allow ${toolSummary(tool, input)}?`;
+				if (tool == 'Bash' || tool.startsWith('mcp__')) return await io.confirm(question, false);
+
+				const answer = await io.select(question, [
+					{ name: 'Yes', value: 'yes' },
+					{ name: `Yes, and allow ${tool} for the rest of this session`, value: 'session' },
+					{ name: 'No', value: 'no' },
+				]);
+				if (answer == 'session') sessionAllowed.add(tool);
+				return answer != 'no';
 			},
 			onText: text => console.log(text),
 			onTool(name, input) {
