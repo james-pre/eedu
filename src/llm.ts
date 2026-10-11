@@ -94,6 +94,8 @@ export interface AgentOptions {
 	allowedTools?: string[];
 	/** Tools that always need approval, in addition to Bash */
 	askTools?: string[];
+	/** @returns Why a tool call isn't allowed, which denies it before anything else */
+	validate?(tool: string, input: Record<string, unknown>): Promise<string | undefined>;
 	model?: string;
 	/** Session to continue */
 	resume?: string;
@@ -101,8 +103,8 @@ export interface AgentOptions {
 	acceptEdits?: boolean;
 	/** @returns The answer to each question, keyed by question text */
 	answer(questions: Question[]): Promise<Record<string, string>>;
-	/** Whether to allow a tool call that eedu does not allow on its own */
-	approve(tool: string, input: Record<string, unknown>): Promise<boolean>;
+	/** Whether to allow a tool call that eedu does not allow on its own, or why the user declined it */
+	approve(tool: string, input: Record<string, unknown>): Promise<boolean | { reason: string }>;
 	onText?(text: string): void;
 	onTool?(name: string, input: Record<string, unknown>): void;
 }
@@ -150,6 +152,8 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 	const guard: HookCallback = async input => {
 		if (input.hook_event_name != 'PreToolUse') return {};
 		const { tool_name: tool } = input;
+		const invalid = await options.validate?.(tool, input.tool_input as Record<string, unknown>);
+		if (invalid) return { hookSpecificOutput: { ...decide('deny').hookSpecificOutput, permissionDecisionReason: invalid } };
 		if (askTools.includes(tool)) return decide('ask');
 		if (tool in fileAccess) {
 			const allowed = fileAccess[tool] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
@@ -188,8 +192,10 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 					const questions = input.questions as Question[];
 					return { behavior: 'allow', updatedInput: { questions, answers: await oneAtATime(() => options.answer(questions)) } };
 				}
-				if (await oneAtATime(() => options.approve(tool, input))) return { behavior: 'allow', updatedInput: input };
-				return { behavior: 'deny', message: 'The user did not allow this' };
+				const approval = await oneAtATime(() => options.approve(tool, input));
+				if (approval === true) return { behavior: 'allow', updatedInput: input };
+				const message = approval ? 'The user declined: ' + approval.reason : 'The user did not allow this';
+				return { behavior: 'deny', message };
 			},
 		},
 	});

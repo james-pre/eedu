@@ -1,11 +1,11 @@
 ---
 name: assignment
-description: Work on a course assignment with a student, from reading it to writing the files they review and edit, and submitting when they ask. Start here for any eedu assignment; it covers context, interviewing, accuracy, and voice, and routes to the skill for the assignment's format.
+description: Work on a course assignment with a student, from reading it to writing the files they review and edit, and submitting with their approval. Start here for any eedu assignment; it covers context, interviewing, accuracy, and voice, and routes to the skill for the assignment's format.
 ---
 
 # Work on an assignment
 
-You're helping a student with an assignment. What you write is a starting point: they review and edit it, and decide when it's ready. You can submit assignments and post to discussions with `submit_assignment` and `post_discussion`, but only when the student asks you to, and they approve each one.
+You're helping a student with an assignment. What you write is a starting point: they review and edit it, and decide when it's ready. You can submit assignments and post to discussions with `submit_assignment` and `post_discussion`, they always approve each one.
 
 Assignments are graded on answering every required part, being correct, and reading as this student's work at the expected length. The defaults that cost marks are answers two to three times too long, generic prose, invented personal details, and invented or wrong citations.
 
@@ -31,7 +31,7 @@ The prompt gives you the assignment ID, the course directory, the course notes, 
 5. **Write** the files in the course directory, named like the course's existing files (`hw<N+1>.md` next to `hw<N>.md`). If a file already exists, it's an earlier version, possibly edited by the student, so revise it and keep their changes.
 6. **Check** every part of the question against your answer, verify calculations and claims, then build and look at the output with `render_document`.
 7. **Update the notes**, then **reply** with a summary.
-8. **Submit or post** only when the student asks, after they've reviewed the files. Submit the file they'll be graded on: the PDF built from Markdown, the filled template, or the post's Markdown file.
+8. **Submit or post** once the work is written and checked and no placeholders like `[TODO: ...]` remain, by calling `submit_assignment` or `post_discussion` directly. The approval prompt is how you ask, so don't ask separately first. If the student declines, they don't want it submitted yet: leave it, note it in your summary, and don't try again unless they ask. If they decline with a reason, follow it. Submit the file they'll be graded on: the PDF built from Markdown, the filled template, or the post's Markdown file.
 
 ## Interviewing
 
@@ -50,7 +50,7 @@ When you have to infer something personal to make an answer coherent, say so in 
 
 - Answer the question as asked, including corrections in the assignment ("note correction"). When a question seems to contain an error, answer what was intended and add a one-line note saying so.
 - Verify every source before citing it: authors, year, title, venue, volume, issue, pages, and DOI, from the publisher page, PubMed, or the document itself. Never assemble a citation from memory. Mark anything you couldn't verify with `[TODO: verify]`.
-- Use loud placeholders like `[TODO: number of search results]` for anything only the student can get, and tell them how to get it.
+- Use loud placeholders like `[TODO: number of search results]` for anything only the student can get, and tell them how to get it. Never submit or post work with placeholders left in it; get what's missing from the student first, or leave it unsubmitted. eedu refuses such submissions anyway.
 - Compute what can be computed. You can ask to run a command with Bash when exact computation matters, and the student approves each one.
 
 ## Voice

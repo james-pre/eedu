@@ -138,8 +138,68 @@ const readOnly = { annotations: { readOnlyHint: true } };
  * MCP tools for reading and writing a course's assignments, discussions, and documents.
  * Paths are relative to the course directory, and can be read anywhere in the school directory but only written in the course directory.
  */
-export function eeduTools(sources: AssignmentSource[], course: Course) {
+export interface ToolEvents {
+	/** What a tool is doing, in words */
+	onStatus?(text: string): void;
+	/** A submission or discussion post was made */
+	onSubmit?(): void;
+}
+
+/** Why a submit_assignment or post_discussion call can't go ahead because its files still have placeholders like `[TODO: ...]` */
+export async function unfinished(course: Course, tool: string, input: Record<string, any>): Promise<string | undefined> {
+	const files: unknown[] =
+		tool == 'submit_assignment' ? [input.text_file, ...(input.files ?? [])] : tool == 'post_discussion' ? [input.file] : [];
 	const dir = courseDir(course);
+
+	const found: string[] = [];
+	for (const file of files) {
+		if (typeof file != 'string') continue;
+		const full = resolve(dir, file);
+		if (!within(full, [dir]) || !existsSync(full)) continue;
+		for (const placeholder of await documents.placeholders(full)) found.push(`${file}: ${placeholder}`);
+	}
+
+	if (!found.length) return;
+	return "These files still have placeholders, so they can't be submitted until they're filled in:\n" + found.join('\n');
+}
+
+/** The discussion topic of an assignment or a topic ID, as given to post_discussion */
+async function discussionOf(course: Course, assignment?: string, topic?: number): Promise<canvasTypes.DiscussionTopic | undefined> {
+	if (assignment) {
+		if (!assignment.startsWith('canvas:')) throw new Error('Discussions are only supported for Canvas');
+		return canvas.assignmentDiscussion(course, Number(assignment.slice('canvas:'.length)));
+	}
+	if (topic !== undefined) return canvas.getDiscussion(course, topic);
+}
+
+/** What a submit_assignment call submits, in words */
+const submissionText = ({ text_file, files, url }: { text_file?: string; files?: string[]; url?: string }) =>
+	text_file ?? files?.join(', ') ?? url ?? 'nothing';
+
+/** A question asking the student to approve a call to one of the tools that act on their behalf */
+export async function describeRequest(
+	sources: AssignmentSource[],
+	course: Course,
+	tool: string,
+	input: Record<string, any>
+): Promise<string | undefined> {
+	switch (tool) {
+		case 'mcp__eedu__submit_assignment': {
+			const a = await getAssignment(sources, input.assignment, course);
+			return `Submit ${submissionText(input)} for ${a.name}?` + (input.comment ? ` (comment: "${input.comment}")` : '');
+		}
+		case 'mcp__eedu__post_discussion': {
+			const title = (await discussionOf(course, input.assignment, input.topic))?.title ?? 'the discussion';
+			return input.reply_to === undefined
+				? `Post ${input.file} to ${title}?`
+				: `Post ${input.file} as a reply to entry #${input.reply_to} in ${title}?`;
+		}
+	}
+}
+
+export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}) {
+	const dir = courseDir(course);
+	const status = (text: string) => events.onStatus?.(text);
 
 	const path = (path: string, access: 'read' | 'write'): string => {
 		const full = resolve(dir, path);
@@ -153,7 +213,10 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'get_course',
 			"Get the course: its term, grade categories, every assignment with due dates and scores, and the files in the course's directory",
 			{},
-			async () => textResult(await courseText(sources, course)),
+			async () => {
+				status('Reading course ' + course.name);
+				return textResult(await courseText(sources, course));
+			},
 			readOnly
 		),
 
@@ -161,7 +224,11 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'get_assignment',
 			'Get an assignment: its description, due date, points, status, and how it is submitted',
 			{ id: z.string().describe('Assignment ID, e.g. canvas:12345') },
-			async ({ id }) => textResult(assignmentText(await getAssignment(sources, id, course))),
+			async ({ id }) => {
+				const a = await getAssignment(sources, id, course);
+				status('Reading assignment ' + a.name);
+				return textResult(assignmentText(a));
+			},
 			readOnly
 		),
 
@@ -175,6 +242,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 
 				const topic = await canvas.assignmentDiscussion(course, Number(id.slice('canvas:'.length)));
 				if (!topic) return textResult(assignment.name + ' is not a discussion', true);
+				status('Reading discussion ' + topic.title);
 
 				try {
 					return textResult(discussionText(topic, await canvas.viewDiscussion(course, topic.id)));
@@ -197,12 +265,15 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 				const target = path(folder, 'write');
 				mkdirSync(target, { recursive: true });
 				const lines = [];
-				for (const file of await attachments(sources, await getAssignment(sources, id, course))) {
+				const a = await getAssignment(sources, id, course);
+				status('Downloading files for ' + a.name);
+				for (const file of await attachments(sources, a)) {
 					const out = join(target, slug(file.name));
 					if (existsSync(out)) lines.push('Already have ' + relative(dir, out));
 					else {
 						writeFileSync(out, await file.download());
 						lines.push('Saved ' + relative(dir, out));
+						status('Downloaded ' + relative(dir, out));
 					}
 				}
 				return textResult(lines.join('\n') || 'The assignment has no linked files');
@@ -213,7 +284,10 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'read_document',
 			'Read the text of a document: Markdown for .docx/.odt/.rtf/.html, CSV for each sheet of .xlsx/.ods, and text for .pdf/.pptx and plain text files',
 			{ path: z.string() },
-			async ({ path: p }) => textResult(await documents.readDocument(path(p, 'read'))),
+			async ({ path: p }) => {
+				status('Reading ' + p);
+				return textResult(await documents.readDocument(path(p, 'read')));
+			},
 			readOnly
 		),
 
@@ -227,6 +301,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			},
 			async ({ path: p, first = 1, count = 5 }) => {
 				const full = path(p, p.endsWith('.md') ? 'write' : 'read');
+				status('Rendering ' + p);
 				const { pages, total } = await documents.renderDocument(full, first, count);
 				return {
 					content: [
@@ -242,7 +317,11 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'build_pdf',
 			"Build a PDF next to a Markdown file with pandoc, using the student's settings (xelatex, $ math, raw TeX)",
 			{ path: z.string().describe('Markdown file') },
-			async ({ path: p }) => textResult('Built ' + relative(dir, await documents.buildPdf(path(p, 'write'))))
+			async ({ path: p }) => {
+				const pdf = relative(dir, await documents.buildPdf(path(p, 'write')));
+				status('Built ' + pdf);
+				return textResult('Built ' + pdf);
+			}
 		),
 
 		tool(
@@ -250,6 +329,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			"Convert a document to the format of the output's extension, e.g. .md to .docx/.pptx/.pdf, .csv to .xlsx, or .docx to .pdf",
 			{ input: z.string(), output: z.string() },
 			async ({ input, output }) => {
+				status(`Converting ${input} to ${output}`);
 				await documents.convertDocument(path(input, 'read'), path(output, 'write'));
 				return textResult('Wrote ' + output);
 			}
@@ -260,6 +340,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'Extract a .docx/.pptx/.xlsx file into a folder so its XML can be edited with Read and Edit. Replaces any earlier extraction of the same file.',
 			{ path: z.string() },
 			async ({ path: p }) => {
+				status('Unpacking ' + p);
 				const { dir: parts, parts: names } = await documents.unpackOffice(path(p, 'write'));
 				return textResult(`Extracted to ${relative(dir, parts)}:\n` + names.map(name => '- ' + name).join('\n'));
 			}
@@ -270,6 +351,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 			'Zip a folder from unpack_office back into an office file. The first time an existing file is replaced, the original is kept as .<name>.orig<ext>.',
 			{ folder: z.string(), output: z.string() },
 			async ({ folder, output }) => {
+				status('Packing ' + output);
 				await documents.packOffice(path(folder, 'write'), path(output, 'write'));
 				return textResult('Wrote ' + output);
 			}
@@ -277,15 +359,18 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 
 		tool(
 			'submit_assignment',
-			'Submit to an assignment that is not a discussion; use post_discussion for those. Give exactly one of text_file (.md is converted), files, or url. The student approves each submission.',
+			'Submit to an assignment that is not a discussion; use post_discussion for those. Give exactly one of text_file (.md is converted), files (one or more to upload together), or url. The student approves each submission.',
 			{
 				assignment: z.string().describe('Assignment ID, e.g. canvas:12345'),
 				text_file: z.string().optional().describe('File whose text is submitted'),
-				files: z.string().array().optional().describe('Files to upload'),
+				files: z.string().array().min(1).optional().describe('Files to upload, all in one submission'),
 				url: z.string().optional(),
 				comment: z.string().optional().describe('Comment on the submission'),
 			},
-			async ({ assignment: id, text_file, files, url, comment }) => {
+			async input => {
+				const { assignment: id, text_file, files, url, comment } = input;
+				const placeholders = await unfinished(course, 'submit_assignment', input);
+				if (placeholders) return textResult(placeholders, true);
 				if ([text_file, files, url].filter(x => x !== undefined).length != 1)
 					return textResult('Give exactly one of text_file, files, or url', true);
 
@@ -300,6 +385,8 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 					return textResult(`${a.name} is a discussion; post to its board with post_discussion instead`, true);
 				checkSubmission(a, submission);
 				await submit(sources, a, submission, { comment });
+				events.onSubmit?.();
+				status(`Submitted ${submissionText(input)} for ${a.name}`);
 				return textResult('Submitted to ' + a.name);
 			}
 		),
@@ -314,15 +401,18 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 				reply_to: z.number().int().optional().describe('ID of the entry to reply to'),
 			},
 			async ({ assignment: id, topic: topicId, file, reply_to }) => {
-				if (id && !id.startsWith('canvas:')) return textResult('Discussions are only supported for Canvas', true);
-				const topic = id ? (await canvas.assignmentDiscussion(course, Number(id.slice('canvas:'.length))))?.id : topicId;
+				const placeholders = await unfinished(course, 'post_discussion', { file });
+				if (placeholders) return textResult(placeholders, true);
+				const topic = await discussionOf(course, id, topicId);
 				if (!topic) return textResult('Give the assignment of a discussion, or a topic', true);
 
 				const message = toHTML(readText(path(file, 'write')));
 				const entry =
 					reply_to === undefined
-						? await canvas.postEntry(course, topic, message)
-						: await canvas.replyToEntry(course, topic, reply_to, message);
+						? await canvas.postEntry(course, topic.id, message)
+						: await canvas.replyToEntry(course, topic.id, reply_to, message);
+				events.onSubmit?.();
+				status(reply_to === undefined ? `Posted ${file} to ${topic.title}` : `Replied to entry #${reply_to} in ${topic.title}`);
 				return textResult(`Posted entry #${entry.id}`);
 			}
 		),
@@ -338,11 +428,14 @@ export interface AssignmentOptions extends Omit<
 > {
 	/** Extra instructions from the student, or their feedback when continuing a session */
 	instructions?: string;
+	onStatus?: ToolEvents['onStatus'];
 }
 
 export interface AssignmentResult extends AgentResult {
 	/** The course directory, where Claude wrote its files */
 	dir: string;
+	/** Whether Claude submitted or posted anything */
+	submitted: boolean;
 }
 
 /**
@@ -352,7 +445,8 @@ export interface AssignmentResult extends AgentResult {
 export async function assignment(sources: AssignmentSource[], a: Assignment, options: AssignmentOptions): Promise<AssignmentResult> {
 	const dir = courseDir(a.course);
 	mkdirSync(dir, { recursive: true });
-	const tools = eeduTools(sources, a.course);
+	let submitted = false;
+	const tools = eeduTools(sources, a.course, { onStatus: options.onStatus, onSubmit: () => (submitted = true) });
 
 	const text = options.resume
 		? (options.instructions ?? '')
@@ -372,7 +466,8 @@ export async function assignment(sources: AssignmentSource[], a: Assignment, opt
 		mcpServers: { eedu: createSdkMcpServer({ name: 'eedu', version: $pkg.version, tools }) },
 		allowedTools: tools.filter(t => !askTools.includes(t.name)).map(t => 'mcp__eedu__' + t.name),
 		askTools: askTools.map(name => 'mcp__eedu__' + name),
+		validate: (tool, input) => unfinished(a.course, tool.replace(/^mcp__eedu__/, ''), input),
 	});
 
-	return { ...result, dir };
+	return { ...result, dir, submitted };
 }

@@ -143,3 +143,15 @@ export async function packOffice(dir: string, output: string): Promise<void> {
 	await exec('zip', ['-X', '-r', '-q', zip, '.'], { ...execOptions, cwd: dir });
 	copyFileSync(zip, output);
 }
+
+const placeholderPattern = /\[(?:TODO|INSERT)\b[^\]]*\]/gi;
+
+/** Placeholders like `[TODO: ...]` or `[INSERT ...]` left in text */
+export function textPlaceholders(text: string): string[] {
+	return [...text.matchAll(placeholderPattern)].map(([match]) => match.replaceAll('\\', ''));
+}
+
+/** Placeholders like `[TODO: ...]` or `[INSERT ...]` left in a document */
+export async function placeholders(path: string): Promise<string[]> {
+	return textPlaceholders(await readDocument(path));
+}

@@ -6,6 +6,7 @@ import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import * as auto from './auto.js';
+import * as documents from './documents.js';
 import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
@@ -570,6 +571,26 @@ cli_assignments
 		if (a.description) console.log('\n' + htmlToText(a.description));
 	});
 
+/** Placeholders like `[TODO: ...]` in the text and files being sent, labeled by where they are */
+async function findPlaceholders(text?: Text, files: string[] = []): Promise<string[]> {
+	const found = text ? documents.textPlaceholders(text.content).map(p => 'text: ' + p) : [];
+	for (const file of files) for (const p of await documents.placeholders(file)) found.push(`${file}: ${p}`);
+	return found;
+}
+
+/**
+ * Warn about placeholders left in what's being sent, and ask whether to send it anyway.
+ * Throws when the user declines, or when confirmation is off and they can't be asked.
+ */
+async function warnPlaceholders(found: string[], options: { force: boolean; confirm: boolean }) {
+	if (options.force || !found.length) return;
+	io.warn('This still has placeholders:\n' + found.map(p => '  ' + p).join('\n'));
+	if (!options.confirm) throw new Error('Not sent because of the placeholders, use --force to send it anyway');
+	if (!(await io.confirm('Send it anyway?', false))) throw new Error('Not sent');
+}
+
+const forceHelp = 'Send even if there are placeholders like [TODO: ...]';
+
 cli_assignments
 	.command('submit')
 	.description('Submit to an assignment')
@@ -582,6 +603,7 @@ cli_assignments
 	.option('-f, --file <paths...>', 'Submit files')
 	.option('-m, --comment <text>', 'Add a comment to the submission')
 	.option('-y, --no-confirm', 'Do not ask for confirmation')
+	.option('--force', forceHelp, false)
 	.action(async (id, options) => {
 		const text = textInput(options);
 		const given = [text, options.url, options.file].filter(x => x !== undefined);
@@ -595,6 +617,7 @@ cli_assignments
 
 		const a = await resolveAssignment(id, options.course, { status: ['unsubmitted'], submittable: true });
 		assignments.checkSubmission(a, submission);
+		await warnPlaceholders(await findPlaceholders(text, options.file), options);
 		if (options.confirm) await io.assertYes(`Submit ${submission.type} to ${a.name} in ${a.course.name}`);
 		await assignments.submit(assignmentSources, a, submission, { comment: options.comment });
 		console.log(styleText('green', 'Submitted'), a.name);
@@ -740,6 +763,7 @@ cli_discussions
 	.addOption(formatOption())
 	.option('-A, --attach <path>', 'Attach a file')
 	.option('-y, --no-confirm', 'Do not ask for confirmation')
+	.option('--force', forceHelp, false)
 	.action(async (id, options) => {
 		const text = textInput(options);
 		if (!text) throw new Error('One of --text or --text-file is required');
@@ -747,6 +771,8 @@ cli_discussions
 		const { course, topic } = await resolveDiscussion(id, options.course, true);
 		if (topic.locked_for_user) throw new Error(topic.title + ' is locked');
 		if (options.attach && !topic.permissions.attach) throw new Error(topic.title + ' does not allow attachments');
+
+		await warnPlaceholders(await findPlaceholders(text, options.attach ? [options.attach] : []), options);
 
 		const target = options.replyTo === undefined ? topic.title : `#${options.replyTo} in ${topic.title}`;
 		if (options.confirm) await io.assertYes(`${options.replyTo === undefined ? 'Post in' : 'Reply to'} ${target} (${course.name})`);
@@ -784,6 +810,41 @@ function toolSummary(name: string, input: Record<string, unknown>): string {
 	return [name.replace(/^mcp__eedu__/, ''), detail].filter(x => x).join(' ');
 }
 
+/** The question and details shown when asking the user to approve a tool call */
+async function approvalPrompt(course: Course, tool: string, input: Record<string, any>): Promise<{ question: string; details: string[] }> {
+	const eedu = await auto.describeRequest(assignmentSources, course, tool, input).catch(() => undefined);
+	if (eedu) return { question: eedu, details: [] };
+
+	switch (tool) {
+		case 'Bash': {
+			const command = String(input.command)
+				.split('\n')
+				.map((line, i) => (i ? '      ' : '    $ ') + line)
+				.join('\n');
+			return {
+				question: 'Run this command?',
+				details: [...(input.description ? [styleText('italic', input.description)] : []), command],
+			};
+		}
+		case 'WebFetch': {
+			const host = URL.parse(input.url)?.hostname ?? input.url;
+			return {
+				question: `Fetch a page from ${host}?`,
+				details: [styleText('dim', input.url), ...(input.prompt ? [styleText('italic', input.prompt)] : [])],
+			};
+		}
+		case 'Read':
+		case 'Write':
+		case 'Edit':
+			return { question: `${tool} ${input.file_path}?`, details: [] };
+		case 'Glob':
+		case 'Grep':
+			return { question: `Search ${input.path ?? input.pattern}?`, details: [styleText('dim', JSON.stringify(input))] };
+		default:
+			return { question: `Allow ${tool}?`, details: [styleText('dim', JSON.stringify(input, null, '\t'))] };
+	}
+}
+
 cli_auto
 	.command('assignment')
 	.alias('asgn')
@@ -804,32 +865,43 @@ cli_auto
 			answer: answerQuestions,
 			async approve(tool, input) {
 				if (sessionAllowed.has(tool)) return true;
-				io.log(styleText('dim', JSON.stringify(input, null, '\t')));
-				const question = `Allow ${toolSummary(tool, input)}?`;
-				if (tool == 'Bash' || tool.startsWith('mcp__')) return await io.confirm(question, false);
+				const { question, details } = await approvalPrompt(a.course, tool, input);
+				for (const line of details) io.log(line);
 
+				const forSession = tool != 'Bash' && !tool.startsWith('mcp__');
 				const answer = await io.select(question, [
 					{ name: 'Yes', value: 'yes' },
-					{ name: `Yes, and allow ${tool} for the rest of this session`, value: 'session' },
+					...(forSession ? [{ name: `Yes, and allow ${tool} for the rest of this session`, value: 'session' }] : []),
 					{ name: 'No', value: 'no' },
+					{ name: 'No, and tell Claude why', value: 'reason' },
 				]);
+
 				if (answer == 'session') sessionAllowed.add(tool);
-				return answer != 'no';
+				if (answer == 'reason') {
+					const reason = (await io.ask('Why? ')).trim();
+					return reason ? { reason } : false;
+				}
+				return answer == 'yes' || answer == 'session';
 			},
 			onText: text => io.log(text),
 			onTool(name, input) {
-				if (name != 'AskUserQuestion') io.log(styleText('dim', toolSummary(name, input)));
+				if (name != 'AskUserQuestion' && !name.startsWith('mcp__eedu__')) io.log(styleText('dim', toolSummary(name, input)));
 			},
+			onStatus: text => io.log(styleText('dim', text)),
 		};
 
 		let result = await auto.assignment(assignmentSources, a, { ...handlers, instructions: options.instructions });
+		let submitted = result.submitted;
 
 		for (;;) {
 			console.log(styleText('dim', `Files are in ${result.dir} (estimated cost $${result.cost.toFixed(2)})`));
 			const feedback = (await io.ask('Changes for Claude (leave empty to finish): ')).trim();
 			if (!feedback) break;
 			result = await auto.assignment(assignmentSources, a, { ...handlers, resume: result.sessionId, instructions: feedback });
+			submitted ||= result.submitted;
 		}
+
+		if (submitted) return;
 
 		console.log(
 			styleText('yellow', 'Review and edit the assignment before submitting it.'),

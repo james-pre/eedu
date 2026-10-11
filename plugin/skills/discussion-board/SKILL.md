@@ -1,6 +1,6 @@
 ---
 name: discussion-board
-description: Write discussion board posts and replies to classmates for a student to review and edit, then post them when the student asks. Use for discussion assignments, reflection posts, and short-answer prompts with numbered sub-prompts ("respond to both", "pick two", "support with APA 7 sources").
+description: Write discussion board posts and replies to classmates for a student to review and edit, then post them with the student's approval. Use for discussion assignments, reflection posts, and short-answer prompts with numbered sub-prompts ("respond to both", "pick two", "support with APA 7 sources").
 ---
 
 # Discussion boards
@@ -15,7 +15,7 @@ Read the prompt with `read_discussion`, along with the assignment's description 
 
 ## The initial post
 
-Write the post to its own Markdown file in the course directory, named like earlier ones (`discussions/week-<N>.md`). The file holds only the post, because it's posted as is: by you with `post_discussion` when the student asks, or by them with `eedu assignments submit <id> -T <file>`. The Markdown is converted when posted.
+Write the post to its own Markdown file in the course directory, named like earlier ones (`discussions/week-<N>.md`). The file holds only the post, because it's posted as is: by you with `post_discussion`, which the student approves, or by them with `eedu assignments submit <id> -T <file>`. The Markdown is converted when posted.
 
 - Use the prompt's own numbering so the parts map one to one. A numbered prompt with four lettered sub-parts is still one answer: give each sub-part a sentence in a tight list.
 - One short paragraph per prompt, about 4 to 6 sentences.
@@ -42,6 +42,6 @@ When the prompt asks for credible sources:
 
 ## Replies to classmates
 
-When the assignment requires replies and their posts are visible, ask the student which posts to reply to (offer a few with a one-line summary each). Write each reply to its own file (`discussions/week-<N>-reply-<name>.md`) and note the entry ID. Post it with `post_discussion` (`reply_to`) when the student asks, or they can post it with `eedu discussions post <topic> -r <entry ID> -T <file>`.
+When the assignment requires replies and their posts are visible, ask the student which posts to reply to (offer a few with a one-line summary each). Write each reply to its own file (`discussions/week-<N>-reply-<name>.md`) and note the entry ID. Post it with `post_discussion` (`reply_to`), or they can post it with `eedu discussions post <topic> -r <entry ID> -T <file>`.
 
 A reply engages with something specific in the classmate's post: agree and extend with a fact or experience, or respectfully raise a different angle. Two to four sentences. Don't copy or closely paraphrase other students' posts.
