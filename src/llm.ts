@@ -133,15 +133,27 @@ export function within(path: string, dirs: string[]): boolean {
 /** Characters that let a shell do more than run one command with plain arguments */
 const shellSyntax = /[;&|<>`$()\\\n'"*?{}[\]~!#]/;
 
-/** Whether a Bash command is exactly one of `patterns`, with nothing a shell would treat specially and no `..` in its paths */
-export function allowedCommand(command: string, patterns: string[]): boolean {
-	const text = command.trim();
-	if (shellSyntax.test(text)) return false;
+/** Whether a single command is exactly one of `patterns`, with nothing a shell would treat specially and no `..` in its paths */
+function allowedSingle(command: string, patterns: string[]): boolean {
+	const text = command.replace(/\s+2>\/dev\/null$/, '').trim();
+	if (!text || shellSyntax.test(text)) return false;
 	if (text.split(/\s+/).some(argument => argument.split('/').includes('..'))) return false;
 	return patterns.some(pattern => {
 		const escaped = pattern.split('*').map(part => part.replace(/[.+^${}()|[\]\\]/g, '\\$&'));
 		return new RegExp('^' + escaped.join('[^\\s]*') + '$').test(text);
 	});
+}
+
+/**
+ * Whether every command in a Bash command line is one of `patterns`.
+ * Commands can be joined with `;` or `&&`, and each can discard its errors with `2>/dev/null`.
+ */
+export function allowedCommand(command: string, patterns: string[]): boolean {
+	const commands = command
+		.split(/\s*(?:;|&&)\s*/)
+		.map(part => part.trim())
+		.filter(part => part);
+	return commands.length > 0 && commands.every(part => allowedSingle(part, patterns));
 }
 
 /** Absolute paths a file tool call touches, relative ones resolved against `dir` */

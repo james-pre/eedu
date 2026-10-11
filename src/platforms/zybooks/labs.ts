@@ -16,7 +16,7 @@ import { Screen } from '../../vnc.js';
 const labDir = join(dataDir, 'labs');
 
 /** Bash commands the lab agent runs without asking */
-const allowedCommands = [`ls -la ${labDir}/*`];
+const allowedCommands = [`ls -la ${labDir}/*`, `cat ${labDir}/*`];
 
 const textResult = (text: string, isError: boolean = false) => ({ content: [{ type: 'text' as const, text }], isError });
 
