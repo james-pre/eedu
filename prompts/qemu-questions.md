@@ -5,6 +5,7 @@ For every question that is COMPLETELY visible — its number, its full text, and
 Q<number>: <the exact text of the correct option>{{explain}}
 
 Rules:
+
 - Skip any question clipped at the top or bottom of the image; the next
   screenful will show it in full.
 - Use the question's own number from the image, not a running count.
