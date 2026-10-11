@@ -365,7 +365,8 @@ export interface Lab {
 }
 
 export interface AutoOptions {
-	chapter?: number;
+	/** Chapters to auto-complete, by default all of them */
+	chapters?: number[];
 	section?: number;
 	delay?: number;
 	dryRun: boolean;
@@ -419,7 +420,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 	} = await api<{ zybooks: { chapters: Chapter[]; zybook_id: number }[] }>('GET', `zybooks?zybooks=["${zybook_code}"]`);
 
 	for (const chapter of chapters) {
-		if (typeof opts.chapter == 'number' && chapter.number != opts.chapter) continue;
+		if (opts.chapters?.length && !opts.chapters.includes(chapter.number)) continue;
 
 		for (const section of chapter.sections) {
 			if (typeof opts.section == 'number' && section.number != opts.section) continue;

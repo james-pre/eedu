@@ -153,7 +153,15 @@ cli_auto
 	.argument('[books...]', 'ZyBook book codes to auto-complete', zybooks.data.books)
 	.option('--dry-run', 'Do not send completion requests', false)
 	.option('-f, --force', 'Force re-completion of already completed activities', false)
-	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
+	.option(
+		'-C, --chapter <n>',
+		'Chapter to auto-complete (1-based index), can be given more than once',
+		(value, previous: number[] = []) => {
+			const chapter = Number(value);
+			if (!Number.isSafeInteger(chapter) || chapter <= 0) throw new InvalidArgumentError('Expected a chapter number');
+			return [...previous, chapter];
+		}
+	)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
 	.option('--show-names', 'Show activity names', false)
 	.option('--labs', 'Have Claude work through labs instead of skipping them', false)
@@ -162,6 +170,7 @@ cli_auto
 		for (const book of books) {
 			await zybooks.autoComplete(book, {
 				...options,
+				chapters: options.chapter,
 				onComplete(name, resource, part) {
 					let text = `${styleText('green', 'Completing')} ${name}`;
 					if (typeof part == 'number') text += ` part ${part + 1}/${resource.parts}`;
