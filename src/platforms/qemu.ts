@@ -3,7 +3,8 @@ import * as io from 'ioium/node';
 import sharp from 'sharp';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempDisposableSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { debugMode } from '../config.js';
@@ -25,8 +26,6 @@ export const QemuData = z.object({
 			bottom: z.int().nonnegative().default(0),
 		})
 		.prefault({}),
-	/** Where screenshots and answers are kept */
-	dir: z.string().default(join(dataDir, 'qemu')),
 	scroll: z
 		.object({
 			/**
@@ -53,6 +52,9 @@ export const store = new Manager(QemuData);
 store.loadFile(join(dataDir, 'qemu.json'), { create: true });
 
 export const data = store.data;
+
+/** Screenshots are kept here only while they're being used */
+const tempPrefix = join(tmpdir(), 'eedu-qemu-');
 
 /** `virsh screenshot` has to round-trip the guest's framebuffer, Claude has to think. */
 const timeouts = { virsh: 30_000, claude: 300_000 };
@@ -102,8 +104,6 @@ function sleep(ms: number): Promise<void> {
  * Returns the dimensions of the cropped image.
  */
 export async function screenshot(path: string): Promise<{ width: number; height: number }> {
-	mkdirSync(data.dir, { recursive: true });
-
 	// sharp can not read and write the same file, so the raw capture gets its own path.
 	const raw = path + '.raw.png';
 	virsh('Capturing screenshot', 'screenshot', domain(), '--file', raw);
@@ -163,10 +163,6 @@ export async function discover() {
 	const url = await prompt('Enter the libvirt connection URI: ', data.url);
 	data.url = url.trim() || data.url;
 
-	const dir = await prompt('Enter the directory to keep screenshots and answers in: ', data.dir);
-	data.dir = dir.trim() || data.dir;
-	mkdirSync(data.dir, { recursive: true });
-
 	const domains = virsh('Listing domains', 'list', '--all', '--name')
 		.split('\n')
 		.map(line => line.trim())
@@ -179,21 +175,18 @@ export async function discover() {
 
 	if (!domains.includes(data.name)) throw new Error(`No domain '${data.name}' on ${data.url}`);
 
-	store.update({ url: data.url, dir: data.dir, name: data.name });
+	store.update({ url: data.url, name: data.name });
 
 	// The only reliable way to learn the guest's resolution is to look at it.
 	assertRunning();
 
-	const probe = join(data.dir, 'probe.png');
+	using temp = mkdtempDisposableSync(tempPrefix);
+	const probe = join(temp.path, 'probe.png');
 	virsh('Capturing screenshot', 'screenshot', data.name, '--file', probe);
-	try {
-		const { width, height } = await sharp(probe).metadata();
-		if (!width || !height) throw new Error('Could not read the screenshot dimensions');
-		data.width = width;
-		data.height = height;
-	} finally {
-		rmSync(probe, { force: true });
-	}
+	const { width, height } = await sharp(probe).metadata();
+	if (!width || !height) throw new Error('Could not read the screenshot dimensions');
+	data.width = width;
+	data.height = height;
 
 	store.update({ width: data.width, height: data.height });
 
@@ -234,12 +227,11 @@ export async function autoComplete(opts: AutoOptions) {
 
 	assertRunning();
 
-	const image = join(data.dir, 'screenshots', 'questions.png');
+	using temp = mkdtempDisposableSync(tempPrefix);
+	const image = join(temp.path, 'questions.png');
 	const { out } = opts;
 
 	const runId = new Date().toISOString().replace(/[-:]/g, '').replace(/T/, '-').slice(0, 15);
-	const pageDir = join(data.dir, 'screenshots', 'pages', runId);
-	mkdirSync(pageDir, { recursive: true });
 
 	const seen = new Set<number>();
 	if (out && opts.resume && existsSync(out)) {
@@ -270,13 +262,12 @@ export async function autoComplete(opts: AutoOptions) {
 			break;
 		}
 		previous = hash;
-		copyFileSync(image, join(pageDir, `${page.toString().padStart(3, '0')}.png`));
 
 		let added = 0;
 		try {
 			const output = await llm.ask(
 				llm.prompt('qemu-questions', { image, explain: opts.explain ? ' — <one short sentence of reasoning>' : '' }),
-				{ tools: ['Read'], cwd: data.dir, timeout: timeouts.claude }
+				{ tools: ['Read'], cwd: temp.path, timeout: timeouts.claude }
 			);
 
 			for (const line of output.split('\n').filter(line => /^Q\d+:/.test(line))) {
