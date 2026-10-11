@@ -5,13 +5,15 @@ import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
-import { debugMode } from './config.js';
+import * as auto from './auto.js';
+import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas.js';
 import * as qemu from './platforms/qemu.js';
 import * as zybooks from './platforms/zybooks.js';
 import * as grades from './grades.js';
+import * as llm from './llm.js';
 import type * as canvasTypes from './platforms/canvas.types.js';
 import { htmlToText, readText, textFormats, toHTML, type Text } from './text.js';
 
@@ -755,4 +757,67 @@ cli_discussions
 				? await canvas.postEntry(course, topic.id, message, options.attach)
 				: await canvas.replyToEntry(course, topic.id, options.replyTo, message, options.attach);
 		console.log(styleText('green', 'Posted'), '#' + entry.id);
+	});
+
+async function answerQuestions(questions: llm.Question[]): Promise<Record<string, string>> {
+	const answers: Record<string, string> = {};
+	const other = '\0other';
+
+	for (const q of questions) {
+		const choices = [
+			...q.options.map(o => ({ name: `${o.label} ${styleText('dim', o.description)}`, value: o.label })),
+			{ name: 'Other (type an answer)', value: other },
+		];
+		const question = `${styleText('cyan', q.header)} ${q.question}`;
+		const picked = q.multiSelect ? await io.multiSelect(question, choices) : [await io.select(question, choices)];
+		const typed = picked.includes(other) ? (await io.ask('Your answer: ')).trim() : '';
+		answers[q.question] = [...picked.filter(p => p != other), ...(typed ? [typed] : [])].join(', ');
+	}
+
+	return answers;
+}
+
+function toolSummary(name: string, input: Record<string, unknown>): string {
+	const detail = ['file_path', 'path', 'pattern', 'query', 'url', 'id', 'assignment', 'skill']
+		.map(key => input[key])
+		.find(v => typeof v == 'string');
+	return [name.replace(/^mcp__eedu__/, ''), detail].filter(x => x).join(' ');
+}
+
+cli_auto
+	.command('assignment')
+	.alias('asgn')
+	.description('Work on an assignment with Claude')
+	.argument('[id]', assignmentIdHelp)
+	.option('-c, --course <course>', courseOptionHelp)
+	.option('-i, --instructions <text>', 'Extra instructions for Claude')
+	.option('-m, --model <model>', 'Claude model to use, by default ' + config.llm)
+	.action(async (id, options) => {
+		const a = await resolveAssignment(id, options.course, { pending: true });
+
+		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
+			model: options.model,
+			answer: answerQuestions,
+			approve: (tool, input) => io.confirm(`Allow ${toolSummary(tool, input)}?`, false),
+			onText: text => console.log(text),
+			onTool(name, input) {
+				if (name != 'AskUserQuestion') console.log(styleText('dim', toolSummary(name, input)));
+			},
+		};
+
+		let result = await auto.assignment(assignmentSources, a, { ...handlers, instructions: options.instructions });
+
+		for (;;) {
+			console.log(styleText('dim', `Assignment: ${result.path} (estimated cost $${result.cost.toFixed(2)})`));
+			const feedback = (await io.ask('Changes for Claude (leave empty to finish): ')).trim();
+			if (!feedback) break;
+			result = await auto.assignment(assignmentSources, a, { ...handlers, resume: result.sessionId, instructions: feedback });
+		}
+
+		console.log(
+			styleText('yellow', 'Review and edit the assignment before submitting it.'),
+			"Check your course's policy on AI use and disclose it as required.",
+			'\nThen submit it with:',
+			styleText('cyan', `eedu assignments submit ${a.id} -T ${JSON.stringify(result.path)}`)
+		);
 	});

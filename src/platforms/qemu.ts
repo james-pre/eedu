@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { debugMode } from '../config.js';
 import { dataDir } from '../data.js';
 import { onAdd, prompt, select } from '../discovery.js';
+import * as llm from '../llm.js';
 
 export const QemuData = z.object({
 	url: z.url().default('qemu:///session'),
@@ -26,8 +27,6 @@ export const QemuData = z.object({
 		.prefault({}),
 	/** Where screenshots and answers are kept */
 	dir: z.string().default(join(dataDir, 'qemu')),
-	/** Model passed to `claude --model`, if any */
-	model: z.string().optional(),
 	scroll: z
 		.object({
 			/**
@@ -55,7 +54,7 @@ store.loadFile(join(dataDir, 'qemu.json'), { create: true });
 
 export const data = store.data;
 
-/** `virsh screenshot` has to round-trip the guest's framebuffer, `claude -p` has to think. */
+/** `virsh screenshot` has to round-trip the guest's framebuffer, Claude has to think. */
 const timeouts = { virsh: 30_000, claude: 300_000 };
 
 /**
@@ -158,39 +157,6 @@ export async function scroll(count: number = data.scroll.count): Promise<void> {
 		}
 		await sleep(delay);
 	}
-}
-
-function questionPrompt(image: string, explain: boolean): string {
-	return `Read the image at ${image}. It is a screenshot of a study-question page.
-
-For every question that is COMPLETELY visible — its number, its full text, and all of its options on screen — output exactly one line:
-
-Q<number>: <the exact text of the correct option>${explain ? ' — <one short sentence of reasoning>' : ''}
-
-Rules:
-- Skip any question clipped at the top or bottom of the image; the next
-  screenful will show it in full.
-- Use the question's own number from the image, not a running count.
-- Output only those lines. No preamble, no summary, no markdown fences.
-- If the image contains no complete question, output nothing at all.`;
-}
-
-/** Ask the model to answer every question fully visible in `image`. */
-function answerPage(image: string, explain: boolean): string[] {
-	const output = run(
-		'Answering questions',
-		timeouts.claude,
-		'claude',
-		'-p',
-		questionPrompt(image, explain),
-		'--allowed-tools',
-		'Read',
-		'--output-format',
-		'text',
-		...(data.model ? ['--model', data.model] : [])
-	);
-
-	return output.split('\n').filter(line => /^Q\d+:/.test(line));
 }
 
 export async function discover() {
@@ -308,7 +274,12 @@ export async function autoComplete(opts: AutoOptions) {
 
 		let added = 0;
 		try {
-			for (const line of answerPage(image, opts.explain)) {
+			const output = await llm.ask(
+				llm.prompt('qemu-questions', { image, explain: opts.explain ? ' — <one short sentence of reasoning>' : '' }),
+				{ tools: ['Read'], cwd: data.dir, timeout: timeouts.claude }
+			);
+
+			for (const line of output.split('\n').filter(line => /^Q\d+:/.test(line))) {
 				const number = +line.slice(1, line.indexOf(':'));
 				if (seen.has(number)) continue;
 				seen.add(number);
