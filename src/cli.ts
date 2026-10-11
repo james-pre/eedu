@@ -7,6 +7,7 @@ import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import * as auto from './auto.js';
 import * as documents from './documents.js';
+import * as labs from './labs.js';
 import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
@@ -21,6 +22,8 @@ import { htmlToText, readText, textFormats, toHTML, type Text } from './text.js'
 const cli = new Command('eedu').version($pkg.version).description($pkg.description);
 
 export default cli;
+
+const dim = (text: string) => styleText('dim', text);
 
 const cli_courses = cli.command('courses').description('Manage courses').option('--debug', 'Enable debug mode', false);
 
@@ -153,6 +156,8 @@ cli_auto
 	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
 	.option('--show-names', 'Show activity names', false)
+	.option('--labs', 'Have Claude work through labs on their VMs, instead of skipping them', false)
+	.option('-m, --model <model>', 'Claude model to use for labs, by default ' + config.llm)
 	.action(async (books, options) => {
 		for (const book of books) {
 			await zybooks.autoComplete(book, {
@@ -163,11 +168,31 @@ cli_auto
 					console.log(text);
 				},
 				onSkip(name, resource, reason, show) {
+					if (resource.activity_type == 'lab' && !options.labs) {
+						console.log(`${styleText('yellow', 'Skipping')} ${name}`);
+						io.warnOnce('Labs are skipped. Pass --labs to have Claude work through them on their VMs.');
+						return;
+					}
 					if (!show && !debugMode) return;
 					let text = `${styleText(show ? 'yellow' : 'dim', 'Skipping')} ${name}`;
 					if (reason) text += `: ${reason}`;
 					console.log(text);
 				},
+				onLab: options.labs
+					? async lab => {
+							console.log(`${styleText('green', 'Starting')} ${lab.name}`);
+							const result = await labs.lab(lab, {
+								...agentHandlers(),
+								model: options.model,
+								force: options.force,
+								onStatus: text => io.log(dim(text)),
+							});
+							console.log(
+								styleText('green', `${result.points}/${result.possible} points`),
+								dim(`estimated cost $${result.cost.toFixed(2)}`)
+							);
+						}
+					: undefined,
 			});
 		}
 	});
@@ -804,15 +829,50 @@ async function answerQuestions(questions: llm.Question[]): Promise<Record<string
 }
 
 function toolSummary(name: string, input: Record<string, unknown>): string {
-	const detail = ['file_path', 'path', 'pattern', 'query', 'url', 'id', 'assignment', 'skill']
+	const detail = ['file_path', 'path', 'pattern', 'query', 'url', 'id', 'assignment', 'skill', 'vm', 'text']
 		.map(key => input[key])
 		.find(v => typeof v == 'string');
-	return [name.replace(/^mcp__eedu__/, ''), detail].filter(x => x).join(' ');
+	const point = typeof input.x == 'number' && typeof input.y == 'number' ? `${input.x},${input.y}` : undefined;
+	const keys = Array.isArray(input.keys) ? input.keys.join(' ') : undefined;
+	return [name.replace(/^mcp__\w+__/, ''), detail ?? keys ?? point].filter(x => x).join(' ');
+}
+
+/** How the CLI answers Claude's questions and asks the student to approve tool calls */
+function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'approve' | 'onText' | 'onTool'> {
+	const sessionAllowed = new Set<string>();
+
+	return {
+		answer: answerQuestions,
+		async approve(tool, input) {
+			if (sessionAllowed.has(tool)) return true;
+			const { question, details } = await approvalPrompt(tool, input, course);
+			for (const line of details) io.log(line);
+
+			const forSession = tool != 'Bash' && !tool.startsWith('mcp__');
+			const answer = await io.select(question, [
+				{ name: 'Yes', value: 'yes' },
+				...(forSession ? [{ name: `Yes, and allow ${tool} for the rest of this session`, value: 'session' }] : []),
+				{ name: 'No', value: 'no' },
+				{ name: 'No, and tell Claude why', value: 'reason' },
+			]);
+
+			if (answer == 'session') sessionAllowed.add(tool);
+			if (answer == 'reason') {
+				const reason = (await io.ask('Why? ')).trim();
+				return reason ? { reason } : false;
+			}
+			return answer == 'yes' || answer == 'session';
+		},
+		onText: text => io.log(text),
+		onTool(name, input) {
+			if (name != 'AskUserQuestion' && !name.startsWith('mcp__eedu__')) io.log(dim(toolSummary(name, input)));
+		},
+	};
 }
 
 /** The question and details shown when asking the user to approve a tool call */
-async function approvalPrompt(course: Course, tool: string, input: Record<string, any>): Promise<{ question: string; details: string[] }> {
-	const eedu = await auto.describeRequest(assignmentSources, course, tool, input).catch(() => undefined);
+async function approvalPrompt(tool: string, input: Record<string, any>, course?: Course): Promise<{ question: string; details: string[] }> {
+	const eedu = course && (await auto.describeRequest(assignmentSources, course, tool, input).catch(() => undefined));
 	if (eedu) return { question: eedu, details: [] };
 
 	switch (tool) {
@@ -857,37 +917,11 @@ cli_auto
 	.action(async (id, options) => {
 		const a = await resolveAssignment(id, options.course, { pending: true });
 
-		const sessionAllowed = new Set<string>();
-
 		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
+			...agentHandlers(a.course),
 			model: options.model,
 			acceptEdits: options.acceptEdits,
-			answer: answerQuestions,
-			async approve(tool, input) {
-				if (sessionAllowed.has(tool)) return true;
-				const { question, details } = await approvalPrompt(a.course, tool, input);
-				for (const line of details) io.log(line);
-
-				const forSession = tool != 'Bash' && !tool.startsWith('mcp__');
-				const answer = await io.select(question, [
-					{ name: 'Yes', value: 'yes' },
-					...(forSession ? [{ name: `Yes, and allow ${tool} for the rest of this session`, value: 'session' }] : []),
-					{ name: 'No', value: 'no' },
-					{ name: 'No, and tell Claude why', value: 'reason' },
-				]);
-
-				if (answer == 'session') sessionAllowed.add(tool);
-				if (answer == 'reason') {
-					const reason = (await io.ask('Why? ')).trim();
-					return reason ? { reason } : false;
-				}
-				return answer == 'yes' || answer == 'session';
-			},
-			onText: text => io.log(text),
-			onTool(name, input) {
-				if (name != 'AskUserQuestion' && !name.startsWith('mcp__eedu__')) io.log(styleText('dim', toolSummary(name, input)));
-			},
-			onStatus: text => io.log(styleText('dim', text)),
+			onStatus: text => io.log(dim(text)),
 		};
 
 		let result = await auto.assignment(assignmentSources, a, { ...handlers, instructions: options.instructions });

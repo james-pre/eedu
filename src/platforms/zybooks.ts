@@ -20,8 +20,8 @@ store.loadFile(join(dataDir, 'zybooks.json'), { create: true });
 
 export const data = store.data;
 
-export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
-	const url = new URL(endpoint, 'https://zyserver.zybooks.com/v1/');
+async function request<T>(base: string, method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
+	const url = new URL(endpoint, base);
 	const response = await fetch(url, {
 		method,
 		body: method == 'GET' || method == 'HEAD' ? null : JSON.stringify(body),
@@ -43,6 +43,16 @@ export async function api<T = any>(method: string, endpoint: string, body?: any,
 	}
 
 	return json;
+}
+
+export function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
+	return request<T>('https://zyserver.zybooks.com/v1/', method, endpoint, body, headers);
+}
+
+/** The server behind IT labs, which runs their VMs and grades them. It rejects a content type without a body. */
+function itlabs<T = any>(method: string, endpoint: string, body?: any): Promise<T> {
+	const headers: Record<string, string> = body === undefined ? {} : { 'Content-Type': 'application/json' };
+	return request<T>('https://itlabs-server.zybooks.com/v1/', method, endpoint, body, headers);
 }
 
 export interface Chapter {
@@ -78,7 +88,8 @@ export interface ContentResource {
 	id: number;
 	caption?: string;
 	payload: Payload;
-	instructions?: any[];
+	/** Markdown for IT labs */
+	instructions?: string | unknown[];
 	parts: number;
 	activity_type?: string;
 	type: string;
@@ -93,6 +104,136 @@ export interface Payload {
 	tool?: string;
 	size: any;
 	questions: Question[];
+	/** Instructions, steps, and graded goals, for IT labs */
+	items?: LabItem[];
+	/** The VMs an IT lab runs on */
+	vmImages?: VmImage[];
+}
+
+export interface LabFile {
+	url: string;
+	altText?: string;
+}
+
+/** The start of a page of lab instructions */
+export interface LabPage {
+	pageBreak: true;
+	instructions: string;
+	taskDescription?: string;
+	files: LabFile[];
+}
+
+/** Something to do on a VM */
+export interface LabStep {
+	step: true;
+	number: number;
+	instructions: string;
+	files: LabFile[];
+}
+
+/** Points awarded when a command run on a VM gives the expected output */
+export interface LabGoal {
+	goal: true;
+	points: number;
+	message: string;
+	vmImageTests: { command: string; expected: string; run: boolean }[];
+}
+
+export type LabItem = LabPage | LabStep | LabGoal;
+
+export interface VmImage {
+	name: string;
+	title: string;
+	instanceType: string;
+}
+
+/** A goal with the positions zyBooks grades it by */
+export interface Goal extends LabGoal {
+	/** Position of the goal among the lab's items, which is how grading identifies it */
+	index: number;
+	/** Position of the VM the goal is graded on */
+	instance: number;
+}
+
+export const isPage = (item: LabItem): item is LabPage => 'pageBreak' in item;
+export const isStep = (item: LabItem): item is LabStep => 'step' in item;
+export const isGoal = (item: LabItem): item is LabGoal => 'goal' in item;
+
+/** Every graded goal of a lab, in order */
+export function labGoals(resource: ContentResource): Goal[] {
+	const goals: Goal[] = [];
+	for (const [index, item] of (resource.payload.items ?? []).entries()) {
+		if (!isGoal(item)) continue;
+		goals.push({ ...item, index, instance: Math.max(item.vmImageTests.findIndex(test => test.run), 0) });
+	}
+	return goals;
+}
+
+function sleep(ms: number): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, ms);
+	return promise;
+}
+
+/** Wait for a lab operation, which runs in the background and reports through a status URL */
+async function settled<T>(location: string, timeout: number = 600_000): Promise<T> {
+	const deadline = Date.now() + timeout;
+
+	for (;;) {
+		const status = await itlabs<{ state: string } & T>('GET', location);
+		if (status.state == 'SUCCESS') return status;
+		if (status.state != 'PENDING') throw new Error('The lab VMs reported ' + status.state.toLowerCase());
+		if (Date.now() > deadline) throw new Error('The lab VMs were not ready in time');
+		await sleep(5000);
+	}
+}
+
+/** Start a lab's VMs, which takes a few minutes, and return a URL for each one's screen */
+export async function startLab(zybook_code: string, resourceId: number): Promise<string[]> {
+	const { location } = await itlabs<{ location: string }>('POST', `zybook/${zybook_code}/content_resource/${resourceId}`, {
+		remote_grading: true,
+	});
+	const { streaming_urls } = await settled<{ streaming_urls?: string[] }>(location);
+	if (!streaming_urls?.length) throw new Error('The lab started without any VMs');
+	return streaming_urls;
+}
+
+/** Shut down a lab's VMs, which are billed for as long as they run */
+export async function deleteLab(zybook_code: string, resourceId: number): Promise<void> {
+	const { location } = await itlabs<{ location: string }>('DELETE', `zybook/${zybook_code}/content_resource/${resourceId}`);
+	await settled(location);
+}
+
+/** Which of a lab's points have been earned, one entry per point */
+export async function labCompletion(zybook_code: string, resourceId: number): Promise<number[]> {
+	const { completed_parts } = await itlabs<{ completed_parts: number[] }>(
+		'GET',
+		`zybook/${zybook_code}/content_resource/${resourceId}/completion`
+	);
+	return completed_parts;
+}
+
+/** Whether a VM is ready to be graded, which it is once it has finished starting */
+export async function gradingReady(zybook_id: number, resourceId: number, instance: number): Promise<boolean> {
+	const { is_ready } = await itlabs<{ is_ready: boolean }>('POST', 'grades/is_ready', {
+		content_resource_id: resourceId,
+		instance_index: instance,
+		zybook_id,
+	});
+	return is_ready;
+}
+
+/**
+ * Run a goal's test on its VM and record the points if it passes.
+ * @returns Whether the goal is now complete
+ */
+export async function gradeGoal(zybook_id: number, resourceId: number, goal: Goal): Promise<boolean> {
+	const { parts } = await itlabs<{ parts: number[] }>('POST', `grades/run_grading/${goal.index}`, {
+		content_resource_id: resourceId,
+		instance_index: goal.instance,
+		zybook_id,
+	});
+	return parts.includes(1);
 }
 
 export interface Question {
@@ -176,6 +317,14 @@ export function resourceName(chapter: Chapter, section: ChapterSection, resource
 	return text;
 }
 
+/** An IT lab, which is worked through on VMs instead of being answered */
+export interface Lab {
+	zybook_code: string;
+	zybook_id: number;
+	name: string;
+	resource: ContentResource;
+}
+
 export interface AutoOptions {
 	chapter?: number;
 	section?: number;
@@ -185,6 +334,8 @@ export interface AutoOptions {
 	showNames: boolean;
 	onSkip?(name: string, resource: ContentResource, reason: string, show?: boolean): void;
 	onComplete?(name: string, resource: ContentResource, part?: number): void;
+	/** Work through a lab. Labs are skipped when this is unset. */
+	onLab?(lab: Lab): Promise<void>;
 }
 
 let buildKey: string;
@@ -225,8 +376,8 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 	buildKey = await getBuildKey();
 
 	const {
-		zybooks: [{ chapters }],
-	} = await api<{ zybooks: { chapters: Chapter[] }[] }>('GET', `zybooks?zybooks=["${zybook_code}"]`);
+		zybooks: [{ chapters, zybook_id }],
+	} = await api<{ zybooks: { chapters: Chapter[]; zybook_id: number }[] }>('GET', `zybooks?zybooks=["${zybook_code}"]`);
 
 	for (const chapter of chapters) {
 		if (typeof opts.chapter == 'number' && chapter.number != opts.chapter) continue;
@@ -252,7 +403,9 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 					continue;
 				}
 				if (resource.activity_type == 'lab') {
-					opts.onSkip?.(name, resource, 'cannot auto-complete labs', true);
+					if (!opts.onLab) opts.onSkip?.(name, resource, 'labs are only done with --labs', true);
+					else if (opts.dryRun) opts.onSkip?.(name, resource, 'dry run', true);
+					else await opts.onLab({ zybook_code, zybook_id, name, resource });
 					continue;
 				}
 				switch (resource.type) {
