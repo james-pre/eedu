@@ -10,7 +10,6 @@ export const ZybooksData = z.object({
 	token: z.string().nullish(),
 	user_id: z.int().optional(),
 	books: z.string().array().default([]),
-	completed_resources: z.int().array().default([]),
 });
 
 export interface ZybooksData extends z.infer<typeof ZybooksData> {}
@@ -490,9 +489,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 					opts.onSkip?.(name, resource, 'skipped with --skip', true);
 					continue;
 				}
-				const done =
-					data.completed_resources.includes(resource.id) || (resource.activity_type != 'lab' && isComplete(resource, completed));
-				if (done && !opts.force) {
+				if (resource.activity_type != 'lab' && isComplete(resource, completed) && !opts.force) {
 					opts.onSkip?.(name, resource, 'already completed');
 					continue;
 				}
@@ -544,11 +541,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 						}
 						break;
 				}
-				if (!data.completed_resources.includes(resource.id)) data.completed_resources.push(resource.id);
-				store.update({ completed_resources: data.completed_resources });
 			}
 		}
 	}
-
-	store.update({ completed_resources: data.completed_resources });
 }
