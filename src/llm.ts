@@ -170,7 +170,10 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 		const { tool_name: tool } = input;
 		const invalid = await options.validate?.(tool, input.tool_input as Record<string, unknown>);
 		if (invalid) return { hookSpecificOutput: { ...decide('deny').hookSpecificOutput, permissionDecisionReason: invalid } };
-		if (tool == 'Bash' && allowedCommand(String((input.tool_input as { command?: unknown }).command ?? ''), options.allowedCommands ?? []))
+		if (
+			tool == 'Bash'
+			&& allowedCommand(String((input.tool_input as { command?: unknown }).command ?? ''), options.allowedCommands ?? [])
+		)
 			return decide('allow');
 		if (askTools.includes(tool)) return decide('ask');
 		if (tool in fileAccess) {
