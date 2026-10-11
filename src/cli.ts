@@ -150,7 +150,7 @@ const cli_auto = cli
 cli_auto
 	.command('zybooks')
 	.description('Auto-complete ZyBook activities')
-	.argument('[books...]', 'ZyBook book codes to auto-complete', zybooks.data.books)
+	.argument('[books...]', 'ZyBook book codes to auto-complete (prompted for if omitted)')
 	.option('--dry-run', 'Do not send completion requests', false)
 	.option('-f, --force', 'Force re-completion of already completed activities', false)
 	.option(
@@ -167,6 +167,11 @@ cli_auto
 	.option('--labs', 'Have Claude work through labs instead of skipping them', false)
 	.option('-m, --model <model>', 'Claude model to use for labs, by default ' + config.llm)
 	.action(async (books, options) => {
+		if (!books.length) {
+			if (!zybooks.data.books.length) throw new Error('No books found, run `eedu discover zybooks` first');
+			books = [zybooks.data.books.length == 1 ? zybooks.data.books[0] : await io.select('Select a book', zybooks.data.books)];
+		}
+
 		for (const book of books) {
 			await zybooks.autoComplete(book, {
 				...options,
