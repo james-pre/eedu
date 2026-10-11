@@ -7,7 +7,7 @@ import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import * as auto from './auto.js';
 import * as documents from './documents.js';
-import * as labs from './labs.js';
+import * as labs from './platforms/zybooks/labs.js';
 import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
@@ -156,7 +156,7 @@ cli_auto
 	.option('-C, --chapter <n>', 'Chapter to auto-complete (1-based index)', parseInt)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
 	.option('--show-names', 'Show activity names', false)
-	.option('--labs', 'Have Claude work through labs on their VMs, instead of skipping them', false)
+	.option('--labs', 'Have Claude work through labs instead of skipping them', false)
 	.option('-m, --model <model>', 'Claude model to use for labs, by default ' + config.llm)
 	.action(async (books, options) => {
 		for (const book of books) {
@@ -170,7 +170,7 @@ cli_auto
 				onSkip(name, resource, reason, show) {
 					if (resource.activity_type == 'lab' && !options.labs) {
 						console.log(`${styleText('yellow', 'Skipping')} ${name}`);
-						io.warnOnce('Labs are skipped. Pass --labs to have Claude work through them on their VMs.');
+						io.warnOnce('Labs are skipped. Pass --labs to have Claude work through them.');
 						return;
 					}
 					if (!show && !debugMode) return;
@@ -188,9 +188,13 @@ cli_auto
 								onStatus: text => io.log(dim(text)),
 							});
 							console.log(
-								styleText('green', `${result.points}/${result.possible} points`),
+								styleText(
+									result.points == result.possible ? 'green' : 'yellow',
+									`${result.points}/${result.possible} points`
+								),
 								dim(`estimated cost $${result.cost.toFixed(2)}`)
 							);
+							if (!result.recorded && result.dir) io.warn(`Nothing was submitted. Claude's work is in ${result.dir}`);
 						}
 					: undefined,
 			});

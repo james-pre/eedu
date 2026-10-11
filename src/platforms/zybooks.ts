@@ -93,6 +93,7 @@ export interface ContentResource {
 	parts: number;
 	activity_type?: string;
 	type: string;
+	guid?: string;
 	release_id: number;
 	optional: boolean;
 	_number: number;
@@ -108,6 +109,42 @@ export interface Payload {
 	items?: LabItem[];
 	/** The VMs an IT lab runs on */
 	vmImages?: VmImage[];
+	/** What a programming lab's code is graded against */
+	testCases?: TestCase[];
+}
+
+/** One run of a programming lab's code, with the output it is expected to produce */
+export interface TestCase {
+	id: string;
+	title: string;
+	type: string;
+	points: number;
+	stdin: string;
+	stdout: string;
+	argStr: string;
+	sourceFile: string;
+	hidden: boolean;
+	sortWeight: number;
+	stdoutCompareMethod: string;
+	stdoutCompareOptions: { ignoreCase: boolean; ignoreWhitespace: boolean };
+	preserveTrailingNewlines: boolean;
+}
+
+/** A programming lab's test cases, in the order they are shown */
+export function labTests(resource: ContentResource): TestCase[] {
+	return [...(resource.payload.testCases ?? [])].sort((a, b) => (a.sortWeight ?? 0) - (b.sortWeight ?? 0));
+}
+
+/** Whether a lab is worked through on VMs rather than written as code */
+export const isItLab = (resource: ContentResource): boolean => resource.type == 'itlab';
+
+/** The student's submissions to a programming lab, newest last */
+export async function labSubmissions(zybook_id: number, resourceId: number): Promise<{ date_submitted: string; score: number }[]> {
+	const { submissions } = await api<{ submissions: { date_submitted: string; score: number }[] }>(
+		'GET',
+		`zybook/${zybook_id}/zystudio/${resourceId}/submissions`
+	);
+	return submissions.sort((a, b) => a.date_submitted.localeCompare(b.date_submitted));
 }
 
 export interface LabFile {
@@ -321,6 +358,8 @@ export function resourceName(chapter: Chapter, section: ChapterSection, resource
 export interface Lab {
 	zybook_code: string;
 	zybook_id: number;
+	/** The subject the lab belongs to, which zyStudio needs to open its workspace */
+	subject_id: number;
 	name: string;
 	resource: ContentResource;
 }
@@ -405,7 +444,7 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 				if (resource.activity_type == 'lab') {
 					if (!opts.onLab) opts.onSkip?.(name, resource, 'labs are only done with --labs', true);
 					else if (opts.dryRun) opts.onSkip?.(name, resource, 'dry run', true);
-					else await opts.onLab({ zybook_code, zybook_id, name, resource });
+					else await opts.onLab({ zybook_code, zybook_id, subject_id: section.subject_id, name, resource });
 					continue;
 				}
 				switch (resource.type) {

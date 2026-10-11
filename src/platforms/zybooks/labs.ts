@@ -1,12 +1,15 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
-import $pkg from '../package.json' with { type: 'json' };
-import { dataDir } from './data.js';
-import { prompt, runAgent, type AgentOptions, type AgentResult } from './llm.js';
-import * as zybooks from './platforms/zybooks.js';
-import { Screen } from './vnc.js';
+import $pkg from '../../../package.json' with { type: 'json' };
+import { firstDifference, languageOf, runTests } from './code.js';
+import { dataDir } from '../../data.js';
+import { prompt, runAgent, within, type AgentOptions, type AgentResult } from '../../llm.js';
+import * as zybooks from '../zybooks.js';
+import * as studio from './studio.js';
+import { htmlToText } from '../../text.js';
+import { Screen } from '../../vnc.js';
 
 /** Where the agent keeps notes while working through a lab */
 const labDir = join(dataDir, 'labs');
@@ -66,13 +69,22 @@ export interface LabOptions extends Omit<AgentOptions, 'dir' | 'readable' | 'wri
 export interface LabResult extends AgentResult {
 	points: number;
 	possible: number;
+	/** Whether zyBooks recorded the points, which only happens for IT labs */
+	recorded: boolean;
+	/** Where Claude's work is, for labs the student submits themselves */
+	dir?: string;
+}
+
+/** Have Claude work through a lab, on VMs for an IT lab or as code for a programming lab */
+export function lab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
+	return zybooks.isItLab(lab.resource) ? itLab(lab, options) : codeLab(lab, options);
 }
 
 /**
  * Have Claude work through an IT lab on its VMs.
  * The VMs are started before the agent runs and deleted once it is done, since they are billed for as long as they run.
  */
-export async function lab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
+export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
 	const { zybook_code, zybook_id, resource } = lab;
 	const status = (text: string) => options.onStatus?.(text);
 
@@ -85,7 +97,7 @@ export async function lab(lab: zybooks.Lab, options: LabOptions): Promise<LabRes
 	const points = before.reduce((sum, p) => sum + p, 0);
 	if (points == possible && !options.force) {
 		status(`${lab.name} already has all ${possible} points`);
-		return { text: 'Already complete', sessionId: '', cost: 0, points, possible };
+		return { text: 'Already complete', sessionId: '', cost: 0, points, possible, recorded: true };
 	}
 
 	const dir = join(labDir, `${zybook_code}-${resource.id}`);
@@ -263,10 +275,139 @@ export async function lab(lab: zybooks.Lab, options: LabOptions): Promise<LabRes
 		});
 
 		const after = earned(goals, await zybooks.labCompletion(zybook_code, resource.id));
-		return { ...result, points: after.reduce((sum, p) => sum + p, 0), possible };
+		return { ...result, points: after.reduce((sum, p) => sum + p, 0), possible, recorded: true };
 	} finally {
 		for (const screen of screens) screen.close();
 		status('Deleting the lab VMs');
 		await zybooks.deleteLab(zybook_code, resource.id).catch(() => status('Could not delete the lab VMs, delete them in zyBooks'));
 	}
+}
+
+/** What a test case checks, as the student sees it */
+function testText(test: zybooks.TestCase, index: number): string {
+	const lines = [`### Test ${index + 1} (${test.points} point${test.points == 1 ? '' : 's'})`];
+	if (test.hidden) {
+		lines.push('Hidden: neither its input nor its expected output is shown.');
+		return lines.join('\n');
+	}
+	if (test.argStr) lines.push('Arguments: ' + test.argStr);
+	if (test.stdin) lines.push('Input:', '```', test.stdin, '```');
+	lines.push(
+		`Expected output (${test.stdoutCompareMethod == 'starts_with' ? 'output must start with this' : 'must match exactly'}):`,
+		'```',
+		test.stdout,
+		'```'
+	);
+	return lines.join('\n');
+}
+
+/**
+ * Have Claude write a programming lab and check it against the lab's own test cases.
+ * The lab's files come from the student's zyStudio workspace, and the finished code is written back and submitted there.
+ */
+export async function codeLab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
+	const { zybook_code, zybook_id, resource } = lab;
+	const status = (text: string) => options.onStatus?.(text);
+
+	const tests = zybooks.labTests(resource);
+	const possible = tests.reduce((sum, test) => sum + test.points, 0);
+	if (!tests.length) throw new Error(lab.name + ' has no test cases');
+
+	const submissions = await zybooks.labSubmissions(zybook_id, resource.id).catch(() => []);
+	const best = submissions.reduce((top, s) => Math.max(top, s.score), 0);
+
+	status('Opening the zyStudio workspace for ' + lab.name);
+	const workspace = await studio.open(lab);
+	const starting = await studio.files(workspace);
+
+	const file = starting.find(f => f.isDefault)?.name ?? tests.find(test => test.sourceFile)?.sourceFile ?? 'main.c';
+	const language = languageOf(file);
+	if (!language) throw new Error(`${lab.name} is written in ${file}, which eedu cannot build or run`);
+
+	const dir = join(labDir, `${zybook_code}-${resource.id}`);
+	mkdirSync(dir, { recursive: true });
+	for (const { name, content } of starting) if (!name.includes('/')) writeFileSync(join(dir, name), content);
+
+	let points = 0;
+	let submitted = false;
+
+	const tools = [
+		tool(
+			'run_tests',
+			"Build the lab's code and run it against the lab's own test cases on this machine, reporting what passed. Only files in the lab directory are built and run. This does not submit anything.",
+			{
+				file: z.string().optional().describe(`Source file in the lab directory, by default ${file}`),
+				tests: z.number().int().min(1).array().optional().describe('Test numbers to run, by default all of them'),
+			},
+			async ({ file: source = file, tests: wanted }) => {
+				const chosen = wanted ? wanted.map(n => tests[n - 1]).filter(test => test) : tests;
+				status(`Running ${chosen.length} test(s) against ${source}`);
+
+				const results = await runTests(dir, source, chosen);
+
+				const lines = results.map(result => {
+					const number = tests.indexOf(result.test) + 1;
+					if (result.passed) return `Test ${number}: passed, ${result.test.points} point(s)`;
+					const detail = result.error ?? firstDifference(result.output, result.test.stdout) ?? 'output did not match';
+					return `Test ${number}: failed, ${detail}\n  got: ${JSON.stringify(result.output)}`;
+				});
+
+				const total = results.reduce((sum, result) => sum + result.points, 0);
+				return textResult(lines.join('\n') + `\n\n${total}/${chosen.reduce((s, t) => s + t.points, 0)} points on these tests`);
+			}
+		),
+
+		tool(
+			'submit_lab',
+			"Upload the lab's files to zyStudio, run its tests there, and record the result as the student's submission. The student approves each submission.",
+			{ files: z.string().array().min(1).optional().describe(`Files in the lab directory to upload, by default ${file}`) },
+			async ({ files: wanted = [file] }) => {
+				for (const name of wanted) {
+					const path = join(dir, name);
+					if (!within(path, [dir])) return textResult(`${name} is outside the lab directory`, true);
+					if (!existsSync(path)) return textResult(`${name} does not exist`, true);
+					status('Uploading ' + name);
+					await studio.writeFile(workspace, name, readFileSync(path, 'utf8'));
+				}
+
+				status('Running the tests in zyStudio, which takes a moment');
+				const result = await studio.score(workspace);
+				await studio.recordSubmission(zybook_code, resource.id);
+				submitted = true;
+				points = Math.max(points, result.points);
+				status(`Submitted ${lab.name}, ${result.points}/${result.possible} points`);
+
+				const lines = result.results.map((test, i) => {
+					if (test.passed) return `Test ${i + 1}: passed`;
+					const detail = test.error || firstDifference(test.actual ?? '', test.expected ?? '') || 'output did not match';
+					return `Test ${i + 1}: failed, ${detail}`;
+				});
+				return textResult([`Submitted. ${result.points}/${result.possible} points recorded.`, ...lines].join('\n'));
+			}
+		),
+	];
+
+	const text = options.resume
+		? (options.instructions ?? '')
+		: prompt('zybooks-code-lab', {
+				name: lab.name,
+				language,
+				file,
+				dir,
+				files: starting.map(f => `- ${f.name}${f.isDefault ? ' (the file to edit)' : ''}`).join('\n'),
+				tests: tests.map(testText).join('\n\n'),
+				lab: htmlToText(typeof resource.instructions == 'string' ? resource.instructions : ''),
+				history: submissions.length ? `Submitted ${submissions.length} time(s), best score ${best}/${possible}.` : 'Not submitted yet.',
+				instructions: options.instructions ? "The student's instructions:\n" + options.instructions : '',
+			});
+
+	const result = await runAgent(text, {
+		...options,
+		dir,
+		mcpServers: { lab: createSdkMcpServer({ name: 'lab', version: $pkg.version, tools }) },
+		allowedTools: ['mcp__lab__run_tests'],
+		askTools: ['mcp__lab__submit_lab'],
+	});
+
+	return { ...result, points: submitted ? points : best, possible, recorded: submitted, dir };
 }
