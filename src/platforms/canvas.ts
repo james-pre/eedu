@@ -5,9 +5,9 @@ import * as io from 'ioium/node';
 import { openAsBlob } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { AssignmentSource, PulledAssignment, SubmissionType } from '../assignments.js';
-import { dataDir, school, type Course } from '../data.js';
+import { courseId, dataDir, school, uniqueCourseId, type Course } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
-import type { GradeSource } from '../grades.js';
+import { renameCourse, type GradeSource } from '../grades.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { toHTML } from '../text.js';
 import { normalizeURL } from '../utils.js';
@@ -139,10 +139,25 @@ export async function discover(options: DiscoverOptions) {
 		}
 
 		const existing = school.data.courses.find(c => c.canvas_id == course.id);
+		const fallback = course.name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-|-$/g, '');
+		const id = uniqueCourseId(
+			courseId(course.name) ?? courseId(course.course_code) ?? fallback,
+			term_id,
+			c => c.canvas_id == course.id
+		);
+
+		if (existing && existing.id == course.course_code && existing.id != id) {
+			renameCourse(existing.id, id);
+			io.info(`Renamed course ${existing.id} to ${id}`);
+			existing.id = id;
+		}
 
 		if (!existing) {
 			school.data.courses.push({
-				id: course.course_code,
+				id,
 				name: course.name,
 				term: term_id,
 				canvas_id: course.id,

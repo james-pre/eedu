@@ -313,6 +313,16 @@ function getItem(id: string) {
 	return { id, ...found };
 }
 
+/** Move a course's grades to a new course ID */
+export function renameCourse(from: string, to: string) {
+	edit(saved => {
+		const grades = saved.courses?.[from];
+		if (!grades) return;
+		saved.courses![to] = grades;
+		delete saved.courses![from];
+	});
+}
+
 export function setIgnored(id: string, ignored: boolean) {
 	const { course, category } = getItem(id);
 	store.update({ courses: { [course]: { categories: { [category]: { scores: { [id]: { ignored } } } } } } });
