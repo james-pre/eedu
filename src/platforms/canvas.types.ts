@@ -460,6 +460,7 @@ export interface DiscussionTopic {
 	user_name: string;
 	discussion_type: 'side_comment' | 'threaded' | 'not_threaded';
 	group_category_id: number | null;
+	group_topic_children?: { id: number; group_id: number }[];
 	attachments: FileAttachment[];
 	allow_rating: boolean;
 	only_graders_can_rate: boolean;

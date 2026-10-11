@@ -9,11 +9,13 @@ Discussion prompts look like short essays but aren't. They're graded on hitting 
 
 ## Reading the board
 
+A discussion assignment is linked to its board, so work with the board directly: read it with `read_discussion` and post with `post_discussion`, both using the assignment ID. Group discussions resolve to the student's group automatically. Never use `submit_assignment` for a discussion.
+
 Read the prompt with `read_discussion`, along with the assignment's description and any rubric. Some boards require posting before showing other entries, so you may only see the prompt. Earlier boards in the course show the student's past posts and what the instructor responds to; the course notes list them.
 
 ## The initial post
 
-Write the post to its own Markdown file in the course directory, named like earlier ones (`discussions/week-<N>.md`). The file holds only the post, because it's posted as is: by you with `submit_assignment` (`text_file`) when the student asks, or by them with `eedu assignments submit <id> -T <file>`. The Markdown is converted when posted.
+Write the post to its own Markdown file in the course directory, named like earlier ones (`discussions/week-<N>.md`). The file holds only the post, because it's posted as is: by you with `post_discussion` when the student asks, or by them with `eedu assignments submit <id> -T <file>`. The Markdown is converted when posted.
 
 - Use the prompt's own numbering so the parts map one to one. A numbered prompt with four lettered sub-parts is still one answer: give each sub-part a sentence in a tight list.
 - One short paragraph per prompt, about 4 to 6 sentences.

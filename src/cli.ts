@@ -804,7 +804,7 @@ cli_auto
 			answer: answerQuestions,
 			async approve(tool, input) {
 				if (sessionAllowed.has(tool)) return true;
-				console.log(styleText('dim', JSON.stringify(input, null, '\t')));
+				io.log(styleText('dim', JSON.stringify(input, null, '\t')));
 				const question = `Allow ${toolSummary(tool, input)}?`;
 				if (tool == 'Bash' || tool.startsWith('mcp__')) return await io.confirm(question, false);
 
@@ -816,9 +816,9 @@ cli_auto
 				if (answer == 'session') sessionAllowed.add(tool);
 				return answer != 'no';
 			},
-			onText: text => console.log(text),
+			onText: text => io.log(text),
 			onTool(name, input) {
-				if (name != 'AskUserQuestion') console.log(styleText('dim', toolSummary(name, input)));
+				if (name != 'AskUserQuestion') io.log(styleText('dim', toolSummary(name, input)));
 			},
 		};
 

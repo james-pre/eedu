@@ -277,7 +277,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 
 		tool(
 			'submit_assignment',
-			'Submit to an assignment. Give exactly one of text_file (text and discussion assignments; .md is converted), files, or url. The student approves each submission.',
+			'Submit to an assignment that is not a discussion; use post_discussion for those. Give exactly one of text_file (.md is converted), files, or url. The student approves each submission.',
 			{
 				assignment: z.string().describe('Assignment ID, e.g. canvas:12345'),
 				text_file: z.string().optional().describe('File whose text is submitted'),
@@ -296,6 +296,8 @@ export function eeduTools(sources: AssignmentSource[], course: Course) {
 						: { type: 'url', url: url! };
 
 				const a = await getAssignment(sources, id, course);
+				if (a.types.includes('discussion'))
+					return textResult(`${a.name} is a discussion; post to its board with post_discussion instead`, true);
 				checkSubmission(a, submission);
 				await submit(sources, a, submission, { comment });
 				return textResult('Submitted to ' + a.name);

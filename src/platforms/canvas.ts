@@ -345,7 +345,33 @@ export const assignments: AssignmentSource = {
 	},
 };
 
-const topicEndpoint = (course: Course, topic: number) => `courses/${course.canvas_id}/discussion_topics/${topic}`;
+let userGroups: Promise<number[]> | undefined;
+
+/** IDs of the groups the user is in */
+function groups(): Promise<number[]> {
+	return (userGroups ??= apiAll<{ id: number }>('users/self/groups').then(groups => groups.map(group => group.id)));
+}
+
+const topicEndpoints = new Map<string, Promise<string>>();
+
+/** The API path of a topic, which for a group discussion is the user's group's copy of it */
+function topicEndpoint(course: Course, topic: number): Promise<string> {
+	const base = `courses/${course.canvas_id}/discussion_topics/${topic}`;
+	let endpoint = topicEndpoints.get(base);
+	if (endpoint) return endpoint;
+
+	endpoint = (async () => {
+		const { title, group_topic_children } = await api<types.DiscussionTopic>('GET', base);
+		if (!group_topic_children?.length) return base;
+		const mine = await groups();
+		const child = group_topic_children.find(child => mine.includes(child.group_id));
+		if (!child) throw new Error(`${title} is a group discussion, and you aren't in any of its groups`);
+		return `groups/${child.group_id}/discussion_topics/${child.id}`;
+	})();
+	endpoint.catch(() => topicEndpoints.delete(base));
+	topicEndpoints.set(base, endpoint);
+	return endpoint;
+}
 
 export interface DiscussionListOptions {
 	/** Only topics whose title contains this */
@@ -364,8 +390,9 @@ export function listDiscussions(course: Course, options: DiscussionListOptions =
 	return apiAll(`courses/${course.canvas_id}/discussion_topics` + (params.size ? '?' + params : ''));
 }
 
-export function getDiscussion(course: Course, topic: number): Promise<types.DiscussionTopic> {
-	return api('GET', topicEndpoint(course, topic));
+/** A topic, which for a group discussion is the user's group's copy with the course topic's ID */
+export async function getDiscussion(course: Course, topic: number): Promise<types.DiscussionTopic> {
+	return { ...(await api<types.DiscussionTopic>('GET', await topicEndpoint(course, topic))), id: topic };
 }
 
 /** Find a topic by searching `courses` */
@@ -401,7 +428,7 @@ async function readEntries<T>(fetchEntries: Promise<T>): Promise<T> {
 
 /** Every entry of a topic with replies nested, including `new_entries`, and the participants who wrote them */
 export async function viewDiscussion(course: Course, topic: number): Promise<types.DiscussionView> {
-	const view = await readEntries(api<types.DiscussionView>('GET', topicEndpoint(course, topic) + '/view'));
+	const view = await readEntries(api<types.DiscussionView>('GET', (await topicEndpoint(course, topic)) + '/view'));
 
 	const entries = new Map<number, types.DiscussionViewEntry>();
 	const index = (list: types.DiscussionViewEntry[]) => {
@@ -423,13 +450,13 @@ export async function viewDiscussion(course: Course, topic: number): Promise<typ
 }
 
 /** Top-level entries, newest first */
-export function listEntries(course: Course, topic: number): Promise<types.DiscussionEntry[]> {
-	return readEntries(apiAll(topicEndpoint(course, topic) + '/entries'));
+export async function listEntries(course: Course, topic: number): Promise<types.DiscussionEntry[]> {
+	return readEntries(apiAll((await topicEndpoint(course, topic)) + '/entries'));
 }
 
 /** Replies to an entry, newest first */
-export function listReplies(course: Course, topic: number, entry: number): Promise<types.DiscussionEntry[]> {
-	return readEntries(apiAll(topicEndpoint(course, topic) + `/entries/${entry}/replies`));
+export async function listReplies(course: Course, topic: number, entry: number): Promise<types.DiscussionEntry[]> {
+	return readEntries(apiAll((await topicEndpoint(course, topic)) + `/entries/${entry}/replies`));
 }
 
 async function postMessage(endpoint: string, message: string, attachment?: string): Promise<types.DiscussionEntry> {
@@ -445,8 +472,8 @@ async function postMessage(endpoint: string, message: string, attachment?: strin
  * @param message HTML, see {@link toHTML}
  * @param attachment Path of a file to attach
  */
-export function postEntry(course: Course, topic: number, message: string, attachment?: string): Promise<types.DiscussionEntry> {
-	return postMessage(topicEndpoint(course, topic) + '/entries', message, attachment);
+export async function postEntry(course: Course, topic: number, message: string, attachment?: string): Promise<types.DiscussionEntry> {
+	return postMessage((await topicEndpoint(course, topic)) + '/entries', message, attachment);
 }
 
 /**
@@ -454,26 +481,26 @@ export function postEntry(course: Course, topic: number, message: string, attach
  * @param message HTML, see {@link toHTML}
  * @param attachment Path of a file to attach
  */
-export function replyToEntry(
+export async function replyToEntry(
 	course: Course,
 	topic: number,
 	entry: number,
 	message: string,
 	attachment?: string
 ): Promise<types.DiscussionEntry> {
-	return postMessage(topicEndpoint(course, topic) + `/entries/${entry}/replies`, message, attachment);
+	return postMessage((await topicEndpoint(course, topic)) + `/entries/${entry}/replies`, message, attachment);
 }
 
 /** @param message HTML, see {@link toHTML} */
-export function editEntry(course: Course, topic: number, entry: number, message: string): Promise<types.DiscussionEntry> {
-	return api('PUT', topicEndpoint(course, topic) + `/entries/${entry}`, { message });
+export async function editEntry(course: Course, topic: number, entry: number, message: string): Promise<types.DiscussionEntry> {
+	return api('PUT', (await topicEndpoint(course, topic)) + `/entries/${entry}`, { message });
 }
 
 export async function deleteEntry(course: Course, topic: number, entry: number): Promise<void> {
-	await api('DELETE', topicEndpoint(course, topic) + `/entries/${entry}`);
+	await api('DELETE', (await topicEndpoint(course, topic)) + `/entries/${entry}`);
 }
 
 /** Mark one entry as read, or the topic and all of its entries when `entry` is omitted */
 export async function markRead(course: Course, topic: number, entry?: number): Promise<void> {
-	await api('PUT', topicEndpoint(course, topic) + (entry === undefined ? '/read_all' : `/entries/${entry}/read`));
+	await api('PUT', (await topicEndpoint(course, topic)) + (entry === undefined ? '/read_all' : `/entries/${entry}/read`));
 }
