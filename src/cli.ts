@@ -881,7 +881,7 @@ function toolSummary(name: string, input: Record<string, unknown>): string {
 }
 
 /** How the CLI answers Claude's questions and asks the student to approve tool calls */
-function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'approve' | 'onText' | 'onTool'> {
+function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'approve' | 'onText' | 'onTool' | 'onAutoApprove'> {
 	const sessionAllowed = new Set<string>();
 
 	return {
@@ -908,7 +908,12 @@ function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'appr
 		},
 		onText: text => io.log(text),
 		onTool(name, input) {
-			if (name != 'AskUserQuestion' && !name.startsWith('mcp__eedu__')) io.log(dim(toolSummary(name, input)));
+			if (!['AskUserQuestion', 'Bash'].includes(name) && !name.startsWith('mcp__eedu__')) io.log(dim(toolSummary(name, input)));
+		},
+		onAutoApprove(tool, input) {
+			const [first, ...rest] = String(input.command).split('\n');
+			if (input.description) io.log(styleText('italic', String(input.description)));
+			io.log(dim('    $ ' + first + (rest.length ? ' …' : '')));
 		},
 	};
 }

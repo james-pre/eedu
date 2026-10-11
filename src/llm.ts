@@ -96,6 +96,8 @@ export interface AgentOptions {
 	askTools?: string[];
 	/** Bash commands that run without approval, where `*` matches one argument's worth of text */
 	allowedCommands?: string[];
+	/** A Bash command was run without asking, because eedu allows it */
+	onAutoApprove?(tool: string, input: Record<string, unknown>): void;
 	/** @returns Why a tool call isn't allowed, which denies it before anything else */
 	validate?(tool: string, input: Record<string, unknown>): Promise<string | undefined>;
 	model?: string;
@@ -156,6 +158,23 @@ export function allowedCommand(command: string, patterns: string[]): boolean {
 	return commands.length > 0 && commands.every(part => allowedSingle(part, patterns));
 }
 
+/** `cat > file << DELIMITER` or `cat >> file`, then the text and the closing delimiter, and nothing else */
+const heredoc = /^cat\s+>>?\s*(?<target>\S+)\s+<<(?<strip>-?)\s*(?<quote>['"]?)(?<delimiter>[A-Za-z_][\w-]*)\k<quote>[ \t]*\n(?<body>[\s\S]*?)\n\t*\k<delimiter>[ \t]*\n?$/;
+
+/**
+ * The file a Bash command writes, if all it does is write text to one file with a heredoc.
+ * An unquoted delimiter lets the shell expand `$`, backticks, and backslashes in the text, so those are only allowed when it is quoted.
+ */
+export function heredocTarget(command: string): string | undefined {
+	const match = heredoc.exec(command.trim());
+	if (!match?.groups) return;
+	const { target, quote, delimiter, body } = match.groups;
+	if (shellSyntax.test(target) || target.split('/').includes('..')) return;
+	if (body.split('\n').some(line => line.replace(/^\t*/, '').trimEnd() == delimiter)) return;
+	if (!quote && /[$`\\]/.test(body)) return;
+	return target;
+}
+
 /** Absolute paths a file tool call touches, relative ones resolved against `dir` */
 function toolPaths(tool: string, input: Record<string, unknown>, dir: string): string[] {
 	const base = resolve(dir, typeof input.path == 'string' ? input.path : '.');
@@ -182,11 +201,15 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 		const { tool_name: tool } = input;
 		const invalid = await options.validate?.(tool, input.tool_input as Record<string, unknown>);
 		if (invalid) return { hookSpecificOutput: { ...decide('deny').hookSpecificOutput, permissionDecisionReason: invalid } };
-		if (
-			tool == 'Bash'
-			&& allowedCommand(String((input.tool_input as { command?: unknown }).command ?? ''), options.allowedCommands ?? [])
-		)
-			return decide('allow');
+		if (tool == 'Bash') {
+			const command = String((input.tool_input as { command?: unknown }).command ?? '');
+			const target = heredocTarget(command);
+			const writes = target !== undefined && within(resolve(dir, target), [dir, ...writable]);
+			if (writes || allowedCommand(command, options.allowedCommands ?? [])) {
+				options.onAutoApprove?.(tool, input.tool_input as Record<string, unknown>);
+				return decide('allow');
+			}
+		}
 		if (askTools.includes(tool)) return decide('ask');
 		if (tool in fileAccess) {
 			const allowed = fileAccess[tool] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
