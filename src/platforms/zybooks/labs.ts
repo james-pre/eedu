@@ -19,9 +19,18 @@ const textResult = (text: string, isError: boolean = false) => ({ content: [{ ty
 
 const readOnly = { annotations: { readOnlyHint: true } };
 
-/** Connect to a VM's screen, retrying while the VM finishes starting, since its VNC server comes up after zyBooks says it is running */
-async function connectWhenReady(url: string, timeout: number = 180_000): Promise<Screen> {
+/**
+ * Connect to a VM's screen once it has finished starting.
+ * A connection made while the VM is booting keeps showing the boot screen, so this waits until zyBooks reports the VM ready.
+ */
+async function connectWhenReady(url: string, ready: () => Promise<boolean>, timeout: number = 300_000): Promise<Screen> {
 	const deadline = Date.now() + timeout;
+
+	while (!(await ready().catch(() => false))) {
+		if (Date.now() > deadline) throw new Error('The VM did not finish starting in time');
+		await sleep(5000);
+	}
+
 	for (;;) {
 		try {
 			return await Screen.connect(url);
@@ -137,10 +146,13 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 	};
 
 	try {
-		for (const [index, url] of urls.entries()) {
-			status('Connecting to ' + (vms[index]?.title ?? `VM ${index + 1}`));
-			screens.push(await connectWhenReady(url));
-		}
+		status(`Waiting for ${vms.map(vm => vm.title).join(' and ')} to finish starting`);
+		const connections = await Promise.allSettled(
+			urls.map((url, index) => connectWhenReady(url, () => zybooks.gradingReady(zybook_id, resource.id, index)))
+		);
+		for (const connection of connections) if (connection.status == 'fulfilled') screens.push(connection.value);
+		const failed = connections.find(connection => connection.status == 'rejected');
+		if (failed) throw failed.reason;
 
 		const tools = [
 			tool(

@@ -375,6 +375,8 @@ export interface AutoOptions {
 	/** Chapters to auto-complete, by default all of them */
 	chapters?: number[];
 	section?: number;
+	/** Activities to leave alone, like `1.2.3`, or every activity in a section or chapter, like `1.2` or `1` */
+	skip?: string[];
 	delay?: number;
 	dryRun: boolean;
 	force: boolean;
@@ -445,6 +447,11 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 			for (const [i, resource] of content_resources.entries()) {
 				resource._number = i + 1;
 				const name = resourceName(chapter, section, resource, opts.showNames);
+				const number = `${chapter.number}.${section.number}.${resource._number}`;
+				if (opts.skip?.some(skipped => number == skipped || number.startsWith(skipped + '.'))) {
+					opts.onSkip?.(name, resource, 'skipped with --skip', true);
+					continue;
+				}
 				if (data.completed_resources.includes(resource.id) && !opts.force) {
 					opts.onSkip?.(name, resource, 'already completed');
 					continue;

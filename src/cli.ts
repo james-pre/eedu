@@ -163,6 +163,14 @@ cli_auto
 		}
 	)
 	.option('-S, --section <n>', 'Section to auto-complete (1-based index)', parseInt)
+	.option(
+		'-s, --skip <activity>',
+		'Activity to leave alone, e.g. 1.13.1, or a whole section or chapter like 1.13, can be given more than once',
+		(value, previous: string[] = []) => {
+			if (!/^\d+(\.\d+){0,2}$/.test(value)) throw new InvalidArgumentError('Expected an activity number like 1.13.1');
+			return [...previous, value];
+		}
+	)
 	.option('--show-names', 'Show activity names', false)
 	.option('--labs', 'Have Claude work through labs instead of skipping them', false)
 	.option('-m, --model <model>', 'Claude model to use for labs, by default ' + config.llm)
@@ -182,7 +190,7 @@ cli_auto
 					console.log(text);
 				},
 				onSkip(name, resource, reason, show) {
-					if (resource.activity_type == 'lab' && !options.labs) {
+					if (resource.activity_type == 'lab' && !options.labs && reason != 'skipped with --skip') {
 						console.log(`${styleText('yellow', 'Skipping')} ${name}`);
 						io.warnOnce('Labs are skipped. Pass --labs to have Claude work through them.');
 						return;

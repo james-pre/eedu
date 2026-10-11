@@ -117,71 +117,115 @@ function sleep(ms: number): Promise<void> {
  * Only the raw encoding is used, so every update carries whole pixels.
  */
 export class Screen implements Disposable {
-	#socket: WebSocket;
-	#stream = new Stream();
+	/** The websocket the screen is reached through */
+	readonly url: string;
+	#socket?: WebSocket;
 	#format!: PixelFormat;
 	/** Pixels in the server's format, one screen's worth */
 	#pixels!: Buffer;
-	#updated?: () => void;
+	#stream?: Stream;
+	#closed = false;
+	/** How many updates the current connection has received */
+	#updates = 0;
+	#lastUpdate = 0;
+	/** When the screen last had reason to change: input was sent or the connection opened */
+	#lastChange = 0;
 
 	readonly width!: number;
 	readonly height!: number;
 	readonly name!: string;
 
-	private constructor(socket: WebSocket) {
-		this.#socket = socket;
+	private constructor(url: string) {
+		this.url = url.startsWith('ws') ? url : socketUrl(url);
 	}
 
 	/** Connect to a VNC server and finish the handshake. `url` is a websocket or noVNC page URL. */
 	static async connect(url: string, timeout: number = 30_000): Promise<Screen> {
-		const socket = new WebSocket(url.startsWith('ws') ? url : socketUrl(url));
+		const screen = new Screen(url);
+		await screen.#open(timeout);
+		return screen;
+	}
+
+	/** Open a new connection, replacing the current one */
+	async #open(timeout: number = 30_000): Promise<void> {
+		this.#socket?.close();
+
+		const socket = new WebSocket(this.url);
 		socket.binaryType = 'arraybuffer';
-		const screen = new Screen(socket);
+		const stream = new Stream();
+		this.#socket = socket;
+		this.#stream = stream;
+		this.#updates = 0;
 
-		socket.onmessage = event => screen.#stream.push(Buffer.from(event.data as ArrayBuffer));
-		socket.onclose = () => screen.#stream.fail(new Error('The VNC connection closed'));
-		socket.onerror = () => screen.#stream.fail(new Error('The VNC connection failed'));
-
-		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		const { promise: connected, resolve, reject } = Promise.withResolvers<void>();
 		socket.onopen = () => resolve();
-		const timer = setTimeout(() => reject(new Error(`The VNC server did not respond within ${timeout / 1000}s`)), timeout);
+		socket.onmessage = event => stream.push(Buffer.from(event.data as ArrayBuffer));
+		socket.onclose = () => {
+			const error = new Error('The VNC connection closed');
+			stream.fail(error);
+			reject(error);
+		};
+		socket.onerror = () => {
+			const error = new Error('The VNC connection failed');
+			stream.fail(error);
+			reject(error);
+		};
+
+		const opening = (async () => {
+			await connected;
+			await this.#handshake(stream);
+		})();
+		opening.catch(() => {});
+
+		const { promise: expired, reject: expire } = Promise.withResolvers<never>();
+		const timer = setTimeout(() => expire(new Error(`The VNC server did not respond within ${timeout / 1000}s`)), timeout);
+
 		try {
-			await promise;
-			await screen.#handshake();
+			await Promise.race([opening, expired]);
+		} catch (error) {
+			socket.close();
+			throw error;
 		} finally {
 			clearTimeout(timer);
 		}
 
-		return screen;
+		this.#lastChange = Date.now();
+		this.#request(false);
 	}
 
-	async #handshake(): Promise<void> {
-		const version = String(await this.#stream.read(12));
+	/** Reconnect if the connection has dropped */
+	async #ready(): Promise<void> {
+		if (this.#closed) throw new Error('The VNC connection was closed');
+		if (this.#socket?.readyState !== WebSocket.OPEN) await this.#open();
+	}
+
+	async #handshake(stream: Stream): Promise<void> {
+		const version = String(await stream.read(12));
 		if (!version.startsWith('RFB ')) throw new Error('Not a VNC server');
 		this.#send(Buffer.from('RFB 003.008\n'));
 
-		const count = (await this.#stream.read(1))[0];
+		const count = (await stream.read(1))[0];
 		if (!count) {
-			const length = (await this.#stream.read(4)).readUInt32BE(0);
-			throw new Error('VNC connection refused: ' + String(await this.#stream.read(length)));
+			const length = (await stream.read(4)).readUInt32BE(0);
+			throw new Error('VNC connection refused: ' + String(await stream.read(length)));
 		}
 
-		const types = [...(await this.#stream.read(count))];
+		const types = [...(await stream.read(count))];
 		if (!types.includes(1)) throw new Error('The VNC server wants a password');
 		this.#send(Buffer.from([1]));
 
-		const result = (await this.#stream.read(4)).readUInt32BE(0);
+		const result = (await stream.read(4)).readUInt32BE(0);
 		if (result) throw new Error('The VNC server rejected the connection');
 
 		// Share the session rather than disconnecting anyone else on it.
 		this.#send(Buffer.from([1]));
 
-		const init = await this.#stream.read(24);
+		const init = await stream.read(24);
 		Object.assign(this, { width: init.readUInt16BE(0), height: init.readUInt16BE(2) });
 		this.#format = pixelFormat(init.subarray(4, 20));
 		if (!this.#format.trueColor) throw new Error('The VNC server uses a color map');
 		if (this.#format.bits % 8) throw new Error(`${this.#format.bits}-bit pixels are not supported`);
-		Object.assign(this, { name: String(await this.#stream.read(init.readUInt32BE(20))) });
+		Object.assign(this, { name: String(await stream.read(init.readUInt32BE(20))) });
 
 		this.#pixels = Buffer.alloc(this.width * this.height * (this.#format.bits / 8));
 
@@ -191,33 +235,36 @@ export class Screen implements Disposable {
 		encodings.writeInt32BE(0, 4);
 		this.#send(encodings);
 
-		void this.#receive();
+		void this.#receive(stream);
 	}
 
 	#send(data: Buffer): void {
-		this.#socket.send(new Uint8Array(data));
+		this.#socket?.send(new Uint8Array(data));
 	}
 
 	/** Read server messages until the connection closes, keeping the pixels up to date */
-	async #receive(): Promise<void> {
+	async #receive(stream: Stream): Promise<void> {
 		try {
 			for (;;) {
-				const [type] = await this.#stream.read(1);
+				const [type] = await stream.read(1);
 				switch (type) {
 					case 0:
-						await this.#applyUpdate();
-						this.#updated?.();
+						await this.#applyUpdate(stream);
+						if (stream != this.#stream) return;
+						this.#updates++;
+						this.#lastUpdate = Date.now();
+						this.#request(true);
 						break;
 					case 1: {
-						const header = await this.#stream.read(5);
-						await this.#stream.read(header.readUInt16BE(3) * 6);
+						const header = await stream.read(5);
+						await stream.read(header.readUInt16BE(3) * 6);
 						break;
 					}
 					case 2:
 						break;
 					case 3: {
-						await this.#stream.read(3);
-						await this.#stream.read((await this.#stream.read(4)).readUInt32BE(0));
+						await stream.read(3);
+						await stream.read((await stream.read(4)).readUInt32BE(0));
 						break;
 					}
 					default:
@@ -229,45 +276,65 @@ export class Screen implements Disposable {
 		}
 	}
 
-	async #applyUpdate(): Promise<void> {
-		const header = await this.#stream.read(3);
+	async #applyUpdate(stream: Stream): Promise<void> {
+		const header = await stream.read(3);
 		const bytes = this.#format.bits / 8;
 
 		for (let i = 0; i < header.readUInt16BE(1); i++) {
-			const rect = await this.#stream.read(12);
+			const rect = await stream.read(12);
 			const [x, y, width, height] = [rect.readUInt16BE(0), rect.readUInt16BE(2), rect.readUInt16BE(4), rect.readUInt16BE(6)];
 			const encoding = rect.readInt32BE(8);
 			if (encoding != 0) throw new Error('Unsupported VNC encoding: ' + encoding);
 
-			const data = await this.#stream.read(width * height * bytes);
+			const data = await stream.read(width * height * bytes);
 			for (let row = 0; row < height; row++)
 				data.copy(this.#pixels, ((y + row) * this.width + x) * bytes, row * width * bytes, (row + 1) * width * bytes);
 		}
 	}
 
-	/** Ask for the whole screen and wait for it to arrive */
-	async #refresh(timeout: number = 20_000): Promise<void> {
-		const { promise, resolve, reject } = Promise.withResolvers<void>();
-		this.#updated = resolve;
-		const timer = setTimeout(() => reject(new Error('The VNC server did not send the screen in time')), timeout);
-
+	/**
+	 * Ask for the screen.
+	 * The server only notices changes while an incremental request is waiting, so one is always kept outstanding.
+	 */
+	#request(incremental: boolean): void {
 		const request = Buffer.alloc(10);
 		request.writeUInt8(3, 0);
+		request.writeUInt8(incremental ? 1 : 0, 1);
 		request.writeUInt16BE(this.width, 6);
 		request.writeUInt16BE(this.height, 8);
 		this.#send(request);
+	}
 
-		try {
-			await promise;
-		} finally {
-			clearTimeout(timer);
-			this.#updated = undefined;
+	/** Wait for the screen to stop changing after input, or for an update to arrive at all */
+	async #settle(minimum: number = 750, quiet: number = 400, limit: number = 5000): Promise<void> {
+		const start = Date.now();
+		for (;;) {
+			const now = Date.now();
+			const settled = this.#updates > 0 && now - this.#lastChange >= minimum && now - this.#lastUpdate >= quiet;
+			if (settled || now - start >= limit) return;
+			await sleep(50);
 		}
 	}
 
-	/** The screen as a PNG */
+	/** Whether every pixel is black */
+	#blank(): boolean {
+		return !this.#pixels.some(byte => byte != 0);
+	}
+
+	/**
+	 * The screen as a PNG, once it has settled after any input.
+	 * A connection that has not sent the screen, or only sends a blank one, is replaced and the screen is captured again.
+	 */
 	async capture(): Promise<Buffer> {
-		await this.#refresh();
+		await this.#ready();
+		await this.#settle();
+
+		if (!this.#updates || this.#blank()) {
+			await this.#open();
+			await this.#settle();
+		}
+
+		if (!this.#updates) throw new Error('The VNC server did not send the screen in time');
 
 		const { bits, bigEndian, max, shift } = this.#format;
 		const bytes = bits / 8;
@@ -292,6 +359,7 @@ export class Screen implements Disposable {
 	}
 
 	#key(sym: number, down: boolean): void {
+		this.#lastChange = Date.now();
 		const event = Buffer.alloc(8);
 		event.writeUInt8(4, 0);
 		event.writeUInt8(down ? 1 : 0, 1);
@@ -301,6 +369,7 @@ export class Screen implements Disposable {
 
 	/** Press and release keys together, e.g. `ctrl+alt+delete` or `Enter` */
 	async press(chord: string, delay: number = 40): Promise<void> {
+		await this.#ready();
 		const syms = chord.split('+').map(key => keysym(key.trim()));
 		for (const sym of syms) this.#key(sym, true);
 		await sleep(delay);
@@ -310,6 +379,7 @@ export class Screen implements Disposable {
 
 	/** Type text one character at a time, with `\n` pressing Enter */
 	async type(text: string, delay: number = 20): Promise<void> {
+		await this.#ready();
 		for (const character of text) {
 			if (character == '\n') {
 				await this.press('Enter', delay);
@@ -327,6 +397,7 @@ export class Screen implements Disposable {
 	}
 
 	#pointer(x: number, y: number, mask: number): void {
+		this.#lastChange = Date.now();
 		const event = Buffer.alloc(6);
 		event.writeUInt8(5, 0);
 		event.writeUInt8(mask, 1);
@@ -336,11 +407,13 @@ export class Screen implements Disposable {
 	}
 
 	async move(x: number, y: number): Promise<void> {
+		await this.#ready();
 		this.#pointer(x, y, 0);
 		await sleep(40);
 	}
 
 	async click(x: number, y: number, button: Button = 'left', count: number = 1): Promise<void> {
+		await this.#ready();
 		for (let i = 0; i < count; i++) {
 			this.#pointer(x, y, buttons[button]);
 			await sleep(40);
@@ -355,7 +428,8 @@ export class Screen implements Disposable {
 	}
 
 	/** Put text on the server's clipboard, for pasting instead of typing */
-	paste(text: string): void {
+	async paste(text: string): Promise<void> {
+		await this.#ready();
 		const data = Buffer.from(text, 'latin1');
 		const message = Buffer.alloc(8 + data.length);
 		message.writeUInt8(6, 0);
@@ -365,7 +439,8 @@ export class Screen implements Disposable {
 	}
 
 	close(): void {
-		this.#socket.close();
+		this.#closed = true;
+		this.#socket?.close();
 	}
 
 	[Symbol.dispose](): void {
