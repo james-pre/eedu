@@ -201,7 +201,14 @@ export function labGoals(resource: ContentResource): Goal[] {
 	const goals: Goal[] = [];
 	for (const [index, item] of (resource.payload.items ?? []).entries()) {
 		if (!isGoal(item)) continue;
-		goals.push({ ...item, index, instance: Math.max(item.vmImageTests.findIndex(test => test.run), 0) });
+		goals.push({
+			...item,
+			index,
+			instance: Math.max(
+				item.vmImageTests.findIndex(test => test.run),
+				0
+			),
+		});
 	}
 	return goals;
 }

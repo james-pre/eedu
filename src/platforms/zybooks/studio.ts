@@ -52,7 +52,9 @@ export async function open(lab: Lab): Promise<Workspace> {
 
 	const { token, aci_token } = await api<{ token: string; aci_token: string }>('GET', `zystudio/resource_token?${query}`);
 
-	const exchanged = await request<Record<string, { id: number; workspaceId: number }>>({ aciToken: aci_token }, 'POST',
+	const exchanged = await request<Record<string, { id: number; workspaceId: number }>>(
+		{ aciToken: aci_token },
+		'POST',
 		'/v1/zystudio/resource-tokens/exchange',
 		{ resourceToken: token, checkIfConfigTemplate: false }
 	);
@@ -65,13 +67,16 @@ export async function open(lab: Lab): Promise<Workspace> {
 
 /** Every file in the workspace, including the lab's starting code */
 export async function files(workspace: Workspace): Promise<WorkspaceFile[]> {
-	const contents = await request<
-		{ file: { filename: string }; isDefaultFile: boolean; strContentBase64?: string }[]
-	>(workspace, 'POST', `/v1/zystudio/resources/${workspace.resource}/workspace-content`, {
-		resourceToken: workspace.token,
-		omitFileContent: false,
-		includeDotFiles: false,
-	});
+	const contents = await request<{ file: { filename: string }; isDefaultFile: boolean; strContentBase64?: string }[]>(
+		workspace,
+		'POST',
+		`/v1/zystudio/resources/${workspace.resource}/workspace-content`,
+		{
+			resourceToken: workspace.token,
+			omitFileContent: false,
+			includeDotFiles: false,
+		}
+	);
 
 	return contents.map(({ file, isDefaultFile, strContentBase64 }) => ({
 		name: file.filename,
@@ -98,8 +103,17 @@ function revisionNumber(id: string): number {
 async function editor(workspace: Workspace): Promise<{ url: string; token: string; user: string }> {
 	await request(workspace, 'POST', '/v1/me/uws').catch(() => {});
 
-	const details = await request<{ firebaseDomain: string; firebaseWorkspaceKey: string }>(workspace, 'GET', `/v1/workspaces/${workspace.id}`);
-	const { firebaseCustomToken } = await request<{ firebaseCustomToken: string }>(workspace, 'POST', '/v1/auth/exchange-firebase-token', {});
+	const details = await request<{ firebaseDomain: string; firebaseWorkspaceKey: string }>(
+		workspace,
+		'GET',
+		`/v1/workspaces/${workspace.id}`
+	);
+	const { firebaseCustomToken } = await request<{ firebaseCustomToken: string }>(
+		workspace,
+		'POST',
+		'/v1/auth/exchange-firebase-token',
+		{}
+	);
 
 	const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${editorKey}`, {
 		method: 'POST',

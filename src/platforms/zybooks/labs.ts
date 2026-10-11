@@ -409,7 +409,9 @@ export async function codeLab(lab: zybooks.Lab, options: LabOptions): Promise<La
 				files: starting.map(f => `- ${f.name}${f.isDefault ? ' (the file to edit)' : ''}`).join('\n'),
 				tests: tests.map(testText).join('\n\n'),
 				lab: htmlToText(typeof resource.instructions == 'string' ? resource.instructions : ''),
-				history: submissions.length ? `Submitted ${submissions.length} time(s), best score ${best}/${possible}.` : 'Not submitted yet.',
+				history: submissions.length
+					? `Submitted ${submissions.length} time(s), best score ${best}/${possible}.`
+					: 'Not submitted yet.',
 				instructions: options.instructions ? "The student's instructions:\n" + options.instructions : '',
 			});
 
