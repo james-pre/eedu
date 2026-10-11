@@ -87,6 +87,8 @@ export interface LabOptions extends Omit<AgentOptions, 'dir' | 'readable' | 'wri
 	/** Do the lab again even when every point has been earned */
 	force?: boolean;
 	onStatus?(text: string): void;
+	/** @returns Whether to delete the VMs of other labs that are still running, so this one can start */
+	onLabRunning?(resources: number[]): Promise<boolean>;
 }
 
 export interface LabResult extends AgentResult {
@@ -127,7 +129,14 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 	mkdirSync(dir, { recursive: true });
 
 	status(`Starting ${vms.length} VM(s) for ${lab.name}, which takes a few minutes`);
-	const urls = await zybooks.startLab(zybook_code, resource.id);
+	const urls = await zybooks.startLab(zybook_code, resource.id).catch(async error => {
+		if (!(error instanceof zybooks.LabRunningError) || !(await options.onLabRunning?.(error.resources))) throw error;
+		for (const other of error.resources) {
+			status('Deleting the VMs still running for another lab');
+			await zybooks.deleteLab(zybook_code, other);
+		}
+		return await zybooks.startLab(zybook_code, resource.id);
+	});
 
 	const screens: Screen[] = [];
 	let current = 0;

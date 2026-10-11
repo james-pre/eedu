@@ -233,11 +233,23 @@ async function settled<T>(location: string, timeout: number = 600_000): Promise<
 }
 
 /** Start a lab's VMs, which takes a few minutes, and return a URL for each one's screen */
+/** Another lab still has VMs running, and zyBooks only runs one lab's VMs at a time */
+export class LabRunningError extends Error {
+	constructor(public readonly resources: number[]) {
+		super(`Another lab (${resources.join(', ')}) still has VMs running, and zyBooks only runs one lab's VMs at a time`);
+	}
+}
+
 export async function startLab(zybook_code: string, resourceId: number): Promise<string[]> {
-	const { location } = await itlabs<{ location: string }>('POST', `zybook/${zybook_code}/content_resource/${resourceId}`, {
-		remote_grading: true,
-	});
-	const { streaming_urls } = await settled<{ streaming_urls?: string[] }>(location);
+	const started = await itlabs<{ location?: string; different_crids_with_running_vm?: number[] }>(
+		'POST',
+		`zybook/${zybook_code}/content_resource/${resourceId}`,
+		{ remote_grading: true }
+	);
+	if (started.different_crids_with_running_vm?.length) throw new LabRunningError(started.different_crids_with_running_vm);
+	if (!started.location) throw new Error('zyBooks did not start the lab VMs');
+
+	const { streaming_urls } = await settled<{ streaming_urls?: string[] }>(started.location);
 	if (!streaming_urls?.length) throw new Error('The lab started without any VMs');
 	return streaming_urls;
 }

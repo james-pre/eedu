@@ -180,6 +180,9 @@ cli_auto
 			books = [zybooks.data.books.length == 1 ? zybooks.data.books[0] : await io.select('Select a book', zybooks.data.books)];
 		}
 
+		/** Lab names by resource ID, for naming a lab whose VMs are still running */
+		const labNames = new Map<number, string>();
+
 		for (const book of books) {
 			await zybooks.autoComplete(book, {
 				...options,
@@ -190,6 +193,7 @@ cli_auto
 					console.log(text);
 				},
 				onSkip(name, resource, reason, show) {
+					if (resource.activity_type == 'lab') labNames.set(resource.id, name);
 					if (resource.activity_type == 'lab' && !options.labs && reason != 'skipped with --skip') {
 						console.log(`${styleText('yellow', 'Skipping')} ${name}`);
 						io.warnOnce('Labs are skipped. Pass --labs to have Claude work through them.');
@@ -202,12 +206,20 @@ cli_auto
 				},
 				onLab: options.labs
 					? async lab => {
+							labNames.set(lab.resource.id, lab.name);
 							console.log(`${styleText('green', 'Starting')} ${lab.name}`);
 							try {
 								const result = await labs.lab(lab, {
 									...agentHandlers(),
 									model: options.model,
 									force: options.force,
+									async onLabRunning(resources) {
+										const names = resources.map(id => labNames.get(id) ?? `lab ${id}`).join(', ');
+										return await io.confirm(
+											`${names} still has VMs running, and zyBooks only runs one lab at a time. Delete them? Points already earned are kept.`,
+											true
+										);
+									},
 									onStatus: text => io.log(dim(text)),
 								});
 								if (!result.sessionId) return;
