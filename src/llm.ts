@@ -159,7 +159,8 @@ export function allowedCommand(command: string, patterns: string[]): boolean {
 }
 
 /** `cat > file << DELIMITER` or `cat >> file`, then the text and the closing delimiter, and nothing else */
-const heredoc = /^cat\s+>>?\s*(?<target>\S+)\s+<<(?<strip>-?)\s*(?<quote>['"]?)(?<delimiter>[A-Za-z_][\w-]*)\k<quote>[ \t]*\n(?<body>[\s\S]*?)\n\t*\k<delimiter>[ \t]*\n?$/;
+const heredoc =
+	/^cat\s+>>?\s*(?<target>\S+)\s+<<(?<strip>-?)\s*(?<quote>['"]?)(?<delimiter>[A-Za-z_][\w-]*)\k<quote>[ \t]*\n(?<body>[\s\S]*?)\n\t*\k<delimiter>[ \t]*\n?$/;
 
 /**
  * The file a Bash command writes, if all it does is write text to one file with a heredoc.
