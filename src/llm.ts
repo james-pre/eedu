@@ -94,6 +94,8 @@ export interface AgentOptions {
 	allowedTools?: string[];
 	/** Tools that always need approval, in addition to Bash */
 	askTools?: string[];
+	/** Bash commands that run without approval, where `*` matches one argument's worth of text */
+	allowedCommands?: string[];
 	/** @returns Why a tool call isn't allowed, which denies it before anything else */
 	validate?(tool: string, input: Record<string, unknown>): Promise<string | undefined>;
 	model?: string;
@@ -128,6 +130,20 @@ export function within(path: string, dirs: string[]): boolean {
 	});
 }
 
+/** Characters that let a shell do more than run one command with plain arguments */
+const shellSyntax = /[;&|<>`$()\\\n'"*?{}[\]~!#]/;
+
+/** Whether a Bash command is exactly one of `patterns`, with nothing a shell would treat specially and no `..` in its paths */
+export function allowedCommand(command: string, patterns: string[]): boolean {
+	const text = command.trim();
+	if (shellSyntax.test(text)) return false;
+	if (text.split(/\s+/).some(argument => argument.split('/').includes('..'))) return false;
+	return patterns.some(pattern => {
+		const escaped = pattern.split('*').map(part => part.replace(/[.+^${}()|[\]\\]/g, '\\$&'));
+		return new RegExp('^' + escaped.join('[^\\s]*') + '$').test(text);
+	});
+}
+
 /** Absolute paths a file tool call touches, relative ones resolved against `dir` */
 function toolPaths(tool: string, input: Record<string, unknown>, dir: string): string[] {
 	const base = resolve(dir, typeof input.path == 'string' ? input.path : '.');
@@ -154,6 +170,8 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 		const { tool_name: tool } = input;
 		const invalid = await options.validate?.(tool, input.tool_input as Record<string, unknown>);
 		if (invalid) return { hookSpecificOutput: { ...decide('deny').hookSpecificOutput, permissionDecisionReason: invalid } };
+		if (tool == 'Bash' && allowedCommand(String((input.tool_input as { command?: unknown }).command ?? ''), options.allowedCommands ?? []))
+			return decide('allow');
 		if (askTools.includes(tool)) return decide('ask');
 		if (tool in fileAccess) {
 			const allowed = fileAccess[tool] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];

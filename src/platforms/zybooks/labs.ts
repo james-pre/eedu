@@ -15,6 +15,9 @@ import { Screen } from '../../vnc.js';
 /** Where the agent keeps notes while working through a lab */
 const labDir = join(dataDir, 'labs');
 
+/** Bash commands the lab agent runs without asking */
+const allowedCommands = [`ls -la ${labDir}/*`];
+
 const textResult = (text: string, isError: boolean = false) => ({ content: [{ type: 'text' as const, text }], isError });
 
 const readOnly = { annotations: { readOnlyHint: true } };
@@ -305,6 +308,7 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 			dir,
 			mcpServers: { lab: createSdkMcpServer({ name: 'lab', version: $pkg.version, tools }) },
 			allowedTools: tools.map(t => 'mcp__lab__' + t.name),
+			allowedCommands,
 		});
 
 		const after = earned(goals, await zybooks.labCompletion(zybook_code, resource.id));
@@ -441,6 +445,7 @@ export async function codeLab(lab: zybooks.Lab, options: LabOptions): Promise<La
 		dir,
 		mcpServers: { lab: createSdkMcpServer({ name: 'lab', version: $pkg.version, tools }) },
 		allowedTools: ['mcp__lab__run_tests'],
+		allowedCommands,
 		askTools: ['mcp__lab__submit_lab'],
 	});
 
