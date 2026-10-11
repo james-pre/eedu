@@ -371,6 +371,30 @@ export interface Lab {
 	resource: ContentResource;
 }
 
+/** The parts of each activity in a book that zyBooks has recorded as complete, by resource ID */
+export async function completedParts(zybook_code: string): Promise<Map<number, number[]>> {
+	const response = await api<{ data: unknown }>('GET', `zybook/${zybook_code}/activities/${data.user_id}`);
+	const parts = new Map<number, number[]>();
+
+	const collect = (value: unknown): void => {
+		if (Array.isArray(value)) return value.forEach(collect);
+		if (!value || typeof value != 'object') return;
+		for (const [id, entry] of Object.entries(value)) {
+			if (Array.isArray(entry) && entry.every(part => typeof part == 'number')) parts.set(Number(id), entry);
+			else collect(entry);
+		}
+	};
+
+	collect(response.data);
+	return parts;
+}
+
+/** Whether zyBooks has recorded every part of an activity as complete */
+function isComplete(resource: ContentResource, completed: Map<number, number[]>): boolean {
+	const parts = completed.get(resource.id);
+	return !!parts?.length && parts.length >= resource.parts && parts.every(part => part >= 1);
+}
+
 export interface AutoOptions {
 	/** Chapters to auto-complete, by default all of them */
 	chapters?: number[];
@@ -428,6 +452,8 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 		zybooks: [{ chapters, zybook_id }],
 	} = await api<{ zybooks: { chapters: Chapter[]; zybook_id: number }[] }>('GET', `zybooks?zybooks=["${zybook_code}"]`);
 
+	const completed = await completedParts(zybook_code);
+
 	for (const chapter of chapters) {
 		if (opts.chapters?.length && !opts.chapters.includes(chapter.number)) continue;
 
@@ -452,7 +478,9 @@ export async function autoComplete(zybook_code: string, opts: AutoOptions) {
 					opts.onSkip?.(name, resource, 'skipped with --skip', true);
 					continue;
 				}
-				if (data.completed_resources.includes(resource.id) && !opts.force) {
+				const done =
+					data.completed_resources.includes(resource.id) || (resource.activity_type != 'lab' && isComplete(resource, completed));
+				if (done && !opts.force) {
 					opts.onSkip?.(name, resource, 'already completed');
 					continue;
 				}
