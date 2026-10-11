@@ -157,7 +157,9 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 		return index;
 	};
 
-	try {
+	/** Connect to every VM once it has finished starting, replacing any earlier connections */
+	const connectAll = async (urls: string[]): Promise<void> => {
+		for (const old of screens.splice(0)) old.close();
 		status(`Waiting for ${vms.map(vm => vm.title).join(' and ')} to finish starting`);
 		const connections = await Promise.allSettled(
 			urls.map((url, index) => connectWhenReady(url, () => zybooks.gradingReady(zybook_id, resource.id, index)))
@@ -165,6 +167,10 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 		for (const connection of connections) if (connection.status == 'fulfilled') screens.push(connection.value);
 		const failed = connections.find(connection => connection.status == 'rejected');
 		if (failed) throw failed.reason;
+	};
+
+	try {
+		await connectAll(urls);
 
 		const tools = [
 			tool(
@@ -175,6 +181,32 @@ export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabR
 					current = select(vm);
 					status('Using ' + vms[current].title);
 					return textResult(`Now using ${vms[current].title} (${screen().width}x${screen().height})`);
+				}
+			),
+
+			tool(
+				'reconnect_vm',
+				"Open a new connection to the current VM's screen. Try this first when the screen stops updating or input seems to have no effect; the VM itself keeps running.",
+				{},
+				async () => {
+					status('Reconnecting to ' + vms[current].title);
+					await screen().reconnect();
+					return textResult('Reconnected to ' + vms[current].title);
+				}
+			),
+
+			tool(
+				'restart_vms',
+				"Delete the lab's VMs and start fresh ones, which takes a few minutes. zyBooks only restarts a lab's VMs all together. Everything done on them is lost, though points already earned are kept. Use this when a VM has stopped responding and reconnect_vm did not help.",
+				{},
+				async () => {
+					status('Restarting the lab VMs');
+					for (const old of screens.splice(0)) old.close();
+					await zybooks.deleteLab(zybook_code, resource.id);
+					await connectAll(await zybooks.startLab(zybook_code, resource.id));
+					return textResult(
+						`Restarted ${vms.map(vm => vm.title).join(' and ')}. They are fresh, so redo the steps for any goal that has not passed yet.`
+					);
 				}
 			),
 

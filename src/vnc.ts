@@ -193,6 +193,12 @@ export class Screen implements Disposable {
 		this.#request(false);
 	}
 
+	/** Replace the connection with a new one */
+	async reconnect(): Promise<void> {
+		if (this.#closed) throw new Error('The VNC connection was closed');
+		await this.#open();
+	}
+
 	/** Reconnect if the connection has dropped */
 	async #ready(): Promise<void> {
 		if (this.#closed) throw new Error('The VNC connection was closed');

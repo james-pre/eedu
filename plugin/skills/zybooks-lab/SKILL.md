@@ -19,6 +19,8 @@ The lab runs on VMs you drive through their screens, the way the student would. 
 - `type_text` types into whatever has focus, so click the window first. End a command with `\n` or press Enter with `press_keys`.
 - The VMs have finished starting before you begin, and the screen tools reconnect on their own if a screen stops updating. Applications are still slow to open, so `wait` and take another screenshot rather than typing into a window that isn't ready.
 
+When a VM stops responding, first make sure it isn't just slow: `wait`, then take another screenshot. If the screen still doesn't change after input, call `reconnect_vm`, which opens a new connection without touching the VM. Only if that doesn't help, call `restart_vms`. It replaces all of the lab's VMs with fresh ones and takes a few minutes. Points already earned are kept, but everything done on the VMs is gone, so redo the steps for every goal that hasn't passed, including setup that later goals depend on.
+
 A terminal is more reliable than clicking through a GUI. When a step's result can be reached from PowerShell on Windows or the Terminal Emulator on Kali, use it: fewer screenshots, and the state is easier to verify. If one VM is unusable and the lab has set up SSH between them, reaching it from the other VM's terminal is fair game.
 
 ### Following the steps
