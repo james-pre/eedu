@@ -4,7 +4,7 @@ import { Manager } from '@james-pre/config';
 import * as io from 'ioium/node';
 import { openAsBlob } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { AssignmentSource, PulledAssignment, SubmissionType } from '../assignments.js';
+import type { AssignmentSource, Attachment, PulledAssignment, SubmissionType } from '../assignments.js';
 import { courseId, dataDir, school, uniqueCourseId, type Course } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import { renameCourse, type GradeSource } from '../grades.js';
@@ -277,6 +277,26 @@ async function upload(endpoint: string, path: string): Promise<number> {
 	return ((await response.json()) as { id: number }).id;
 }
 
+interface CanvasFile {
+	id: number;
+	display_name: string;
+	url: string;
+}
+
+/** Files linked from HTML, such as an assignment description */
+export async function linkedFiles(course: Course, html: string): Promise<Attachment[]> {
+	const ids = new Set([...html.matchAll(/\/files\/(\d+)/g)].map(m => m[1]));
+	const files = await Promise.all([...ids].map(id => api<CanvasFile>('GET', `courses/${course.canvas_id}/files/${id}`)));
+	return files.map(file => ({
+		name: file.display_name,
+		async download() {
+			const response = await fetch(file.url, { headers: { Authorization: `Bearer ${data.token}` } });
+			if (!response.ok) throw new Error(`Downloading ${file.display_name} failed: ` + response.statusText);
+			return new Uint8Array(await response.arrayBuffer());
+		},
+	}));
+}
+
 export const assignments: AssignmentSource = {
 	name: 'canvas',
 	has: course => course.canvas_id !== undefined,
@@ -296,6 +316,10 @@ export const assignments: AssignmentSource = {
 			if (e instanceof RequestError && e.status == 404) return;
 			throw e;
 		}
+	},
+	async attachments(course, id) {
+		const assignment = await api<types.Assignment>('GET', `courses/${course.canvas_id}/assignments/${id}`);
+		return linkedFiles(course, assignment.description ?? '');
 	},
 	async submit(course, id, submission, { comment }) {
 		const endpoint = `courses/${course.canvas_id}/assignments/${id}/submissions`;

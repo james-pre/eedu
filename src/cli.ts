@@ -798,7 +798,10 @@ cli_auto
 		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
 			model: options.model,
 			answer: answerQuestions,
-			approve: (tool, input) => io.confirm(`Allow ${toolSummary(tool, input)}?`, false),
+			approve(tool, input) {
+				console.log(styleText('dim', JSON.stringify(input, null, '\t')));
+				return io.confirm(`Allow ${toolSummary(tool, input)}?`, false);
+			},
 			onText: text => console.log(text),
 			onTool(name, input) {
 				if (name != 'AskUserQuestion') console.log(styleText('dim', toolSummary(name, input)));
@@ -808,7 +811,7 @@ cli_auto
 		let result = await auto.assignment(assignmentSources, a, { ...handlers, instructions: options.instructions });
 
 		for (;;) {
-			console.log(styleText('dim', `Assignment: ${result.path} (estimated cost $${result.cost.toFixed(2)})`));
+			console.log(styleText('dim', `Files are in ${result.dir} (estimated cost $${result.cost.toFixed(2)})`));
 			const feedback = (await io.ask('Changes for Claude (leave empty to finish): ')).trim();
 			if (!feedback) break;
 			result = await auto.assignment(assignmentSources, a, { ...handlers, resume: result.sessionId, instructions: feedback });
@@ -817,7 +820,9 @@ cli_auto
 		console.log(
 			styleText('yellow', 'Review and edit the assignment before submitting it.'),
 			"Check your course's policy on AI use and disclose it as required.",
-			'\nThen submit it with:',
-			styleText('cyan', `eedu assignments submit ${a.id} -T ${JSON.stringify(result.path)}`)
+			'\nThen ask Claude to submit it, or submit it with',
+			styleText('cyan', `eedu assignments submit ${a.id} -f <file>`),
+			'or',
+			styleText('cyan', `-T <file.md>`)
 		);
 	});

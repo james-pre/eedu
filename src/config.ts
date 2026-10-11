@@ -8,6 +8,8 @@ export const Config = z.object({
 	/** Claude model used for automation */
 	llm: z.string().default('claude-opus-5-5'),
 	llm_effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+	/** Arguments for pandoc when building PDFs from Markdown */
+	pandoc: z.string().array().default(['--from=markdown+tex_math_dollars+raw_tex+subscript+superscript', '--pdf-engine=xelatex']),
 });
 
 export interface Config extends z.infer<typeof Config> {}

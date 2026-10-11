@@ -48,6 +48,12 @@ const accepts: Record<Submission['type'], SubmissionType[]> = {
 /** Submission types that can be submitted with eedu */
 export const submittableTypes: SubmissionType[] = Object.values(accepts).flat();
 
+/** A file linked from an assignment, such as the questions or a template */
+export interface Attachment {
+	name: string;
+	download(): Promise<Uint8Array>;
+}
+
 export interface SubmitOptions {
 	comment?: string;
 }
@@ -61,6 +67,7 @@ export interface AssignmentSource {
 	/** @returns Undefined if the course has no assignment with the ID */
 	get(course: Course, id: string): Promise<PulledAssignment | undefined>;
 	submit(course: Course, id: string, submission: Submission, options: SubmitOptions): Promise<void>;
+	attachments?(course: Course, id: string): Promise<Attachment[]>;
 }
 
 /** Uses the category of the assignment's grade when there is one. */
@@ -132,6 +139,16 @@ export async function listAssignments(sources: AssignmentSource[], filter: Assig
 	return results.sort((a, b) => (a.due?.getTime() ?? Infinity) - (b.due?.getTime() ?? Infinity));
 }
 
+/** Every assignment in one course, sorted by due date with undated ones last */
+export async function courseAssignments(sources: AssignmentSource[], course: Course): Promise<Assignment[]> {
+	const results: Assignment[] = [];
+	for (const source of sources) {
+		if (!source.has(course)) continue;
+		for (const pulled of await source.list(course)) results.push(resolve(source, course, pulled));
+	}
+	return results.sort((a, b) => (a.due?.getTime() ?? Infinity) - (b.due?.getTime() ?? Infinity));
+}
+
 function sourceOf(sources: AssignmentSource[], id: string): { source: AssignmentSource; localId: string } {
 	const [name, ...rest] = id.split(':');
 	const source = sources.find(s => s.name == name);
@@ -180,6 +197,11 @@ export function checkSubmission(assignment: Assignment, submission: Submission) 
 				throw new Error(`${path} is not an allowed file type, expected: ` + assignment.extensions.join(', '));
 		}
 	}
+}
+
+export async function attachments(sources: AssignmentSource[], assignment: Assignment): Promise<Attachment[]> {
+	const { source, localId } = sourceOf(sources, assignment.id);
+	return (await source.attachments?.(assignment.course, localId)) ?? [];
 }
 
 /** Submit to an assignment, checking that it accepts the submission first. */

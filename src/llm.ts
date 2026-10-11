@@ -80,9 +80,13 @@ export interface AgentOptions {
 	dir: string;
 	/** Directories the agent can also read */
 	readable?: string[];
+	/** Directories and files the agent can also write */
+	writable?: string[];
 	mcpServers?: Record<string, McpServerConfig>;
 	/** Tools that run without approval, e.g. `mcp__eedu__*` */
 	allowedTools?: string[];
+	/** Tools that always need approval, in addition to Bash */
+	askTools?: string[];
 	model?: string;
 	/** Session to continue */
 	resume?: string;
@@ -102,11 +106,12 @@ export interface AgentResult {
 	cost: number;
 }
 
-const agentTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'AskUserQuestion', 'Skill', 'WebSearch', 'WebFetch'];
+const agentTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'AskUserQuestion', 'Skill', 'WebSearch', 'WebFetch'];
 
 const fileAccess: Record<string, 'read' | 'write'> = { Read: 'read', Glob: 'read', Grep: 'read', Write: 'write', Edit: 'write' };
 
-function within(path: string, dirs: string[]): boolean {
+/** Whether `path` is one of `dirs` or inside one */
+export function within(path: string, dirs: string[]): boolean {
 	return dirs.some(dir => {
 		const rel = relative(resolve(dir), path);
 		return rel != '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel);
@@ -123,14 +128,17 @@ function toolPaths(tool: string, input: Record<string, unknown>, dir: string): s
 
 /**
  * Run an agent session.
- * File tools are allowed inside `dir` (and `readable` for reading), anything else needs approval.
+ * File tools are allowed inside `dir`, `writable`, and `readable` (for reading), anything else needs approval.
  */
 export async function runAgent(text: string, options: AgentOptions): Promise<AgentResult> {
-	const { dir, readable = [] } = options;
+	const { dir, readable = [], writable = [] } = options;
+	const askTools = ['Bash', ...(options.askTools ?? [])];
 
 	const guard: HookCallback = async input => {
-		if (input.hook_event_name != 'PreToolUse' || !(input.tool_name in fileAccess)) return {};
-		const allowed = fileAccess[input.tool_name] == 'write' ? [dir] : [dir, ...readable];
+		if (input.hook_event_name != 'PreToolUse') return {};
+		if (askTools.includes(input.tool_name)) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } };
+		if (!(input.tool_name in fileAccess)) return {};
+		const allowed = fileAccess[input.tool_name] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
 		const inside = toolPaths(input.tool_name, input.tool_input as Record<string, unknown>, dir).every(p => within(p, allowed));
 		return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: inside ? 'allow' : 'ask' } };
 	};
@@ -148,7 +156,7 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 			allowedTools: ['WebSearch', ...(options.allowedTools ?? [])],
 			mcpServers: options.mcpServers,
 			permissionMode: options.acceptEdits ? 'acceptEdits' : 'default',
-			hooks: { PreToolUse: [{ matcher: Object.keys(fileAccess).join('|'), hooks: [guard] }] },
+			hooks: { PreToolUse: [{ matcher: [...Object.keys(fileAccess), ...askTools].join('|'), hooks: [guard] }] },
 			async canUseTool(tool, input) {
 				if (tool == 'AskUserQuestion') {
 					const questions = input.questions as Question[];
