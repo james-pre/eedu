@@ -17,7 +17,7 @@ import * as zybooks from './platforms/zybooks.js';
 import * as grades from './grades.js';
 import * as llm from './llm.js';
 import type * as canvasTypes from './platforms/canvas.types.js';
-import { htmlToText, readText, textFormats, toHTML, type Text } from './text.js';
+import { htmlToText, markdownToTerminal, readText, textFormats, toHTML, type Text } from './text.js';
 
 const cli = new Command('eedu').version($pkg.version).description($pkg.description);
 
@@ -906,7 +906,7 @@ function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'appr
 			}
 			return answer == 'yes' || answer == 'session';
 		},
-		onText: text => io.log(text),
+		onText: text => io.log(markdownToTerminal(text)),
 		onTool(name, input) {
 			if (!['AskUserQuestion', 'Bash'].includes(name) && !name.startsWith('mcp__eedu__')) io.log(dim(toolSummary(name, input)));
 		},
