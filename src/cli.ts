@@ -962,14 +962,18 @@ cli_auto
 	.option('-i, --instructions <text>', 'Extra instructions for Claude')
 	.option('-m, --model <model>', 'Claude model to use, by default ' + config.llm)
 	.option('-e, --accept-edits', "Use Claude's accept-edits permission mode", false)
-	.option('--YOLO', 'Allow file access, web requests, and Bash commands without asking, except for risky commands like sudo', false)
+	.option(
+		'--YOLO',
+		'Allow file access, web requests, and Bash commands without asking, except for risky commands like sudo (implies -e)',
+		false
+	)
 	.action(async (id, options) => {
 		const a = await resolveAssignment(id, options.course, { pending: true });
 
 		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
 			...agentHandlers(a.course),
 			model: options.model,
-			acceptEdits: options.acceptEdits,
+			acceptEdits: options.acceptEdits || options.YOLO,
 			yolo: options.YOLO,
 			onStatus: text => io.log(dim(text)),
 		};
