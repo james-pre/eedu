@@ -955,13 +955,14 @@ async function approvalPrompt(tool: string, input: Record<string, any>, course?:
 
 cli_auto
 	.command('assignment')
-	.alias('asgn')
+	.aliases(['asgn', 'ass'])
 	.description('Work on an assignment with Claude')
 	.argument('[id]', assignmentIdHelp)
 	.option('-c, --course <course>', courseOptionHelp)
 	.option('-i, --instructions <text>', 'Extra instructions for Claude')
 	.option('-m, --model <model>', 'Claude model to use, by default ' + config.llm)
 	.option('-e, --accept-edits', "Use Claude's accept-edits permission mode", false)
+	.option('--YOLO', 'Allow file access, web requests, and Bash commands without asking, except for risky commands like sudo', false)
 	.action(async (id, options) => {
 		const a = await resolveAssignment(id, options.course, { pending: true });
 
@@ -969,6 +970,7 @@ cli_auto
 			...agentHandlers(a.course),
 			model: options.model,
 			acceptEdits: options.acceptEdits,
+			yolo: options.YOLO,
 			onStatus: text => io.log(dim(text)),
 		};
 

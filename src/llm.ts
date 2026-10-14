@@ -105,6 +105,8 @@ export interface AgentOptions {
 	resume?: string;
 	/** Use the SDK's `acceptEdits` permission mode */
 	acceptEdits?: boolean;
+	/** Use files anywhere, run Bash commands, and fetch web pages without approval, except for risky commands */
+	yolo?: boolean;
 	/** @returns The answer to each question, keyed by question text */
 	answer(questions: Question[]): Promise<Record<string, string>>;
 	/** Whether to allow a tool call that eedu does not allow on its own, or why the user declined it */
@@ -158,6 +160,10 @@ export function allowedCommand(command: string, patterns: string[]): boolean {
 	return commands.length > 0 && commands.every(part => allowedSingle(part, patterns));
 }
 
+/** Commands that could gain privileges, destroy data, affect other processes, or reach other machines, which always need approval */
+const riskyCommand =
+	/\b(sudo|su|doas|pkexec|run0|dd|mkfs|fdisk|parted|wipefs|shred|shutdown|reboot|poweroff|halt|systemctl|kill|pkill|killall|mount|umount|chown|chmod|crontab|ssh|scp|rsync|eval)\b|\brm\b[^;&|\n]*\s(-\w*[rfR]|--recursive|--force)|\bgit\s+push\b|\|\s*(ba|z)?sh\b|>\s*\/dev\/(?!null\b)/;
+
 /** `cat > file << DELIMITER` or `cat >> file`, then the text and the closing delimiter, and nothing else */
 const heredoc =
 	/^cat\s+>>?\s*(?<target>\S+)\s+<<(?<strip>-?)\s*(?<quote>['"]?)(?<delimiter>[A-Za-z_][\w-]*)\k<quote>[ \t]*\n(?<body>[\s\S]*?)\n\t*\k<delimiter>[ \t]*\n?$/;
@@ -191,7 +197,7 @@ function toolPaths(tool: string, input: Record<string, unknown>, dir: string): s
 export async function runAgent(text: string, options: AgentOptions): Promise<AgentResult> {
 	const { dir, readable = [], writable = [] } = options;
 	const askTools = ['Bash', ...(options.askTools ?? [])];
-	const allowedTools = ['WebSearch', ...(options.allowedTools ?? [])];
+	const allowedTools = ['WebSearch', ...(options.yolo ? ['WebFetch'] : []), ...(options.allowedTools ?? [])];
 
 	const decide = (permissionDecision: HookPermissionDecision) => ({
 		hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision },
@@ -206,13 +212,15 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 			const command = String((input.tool_input as { command?: unknown }).command ?? '');
 			const target = heredocTarget(command);
 			const writes = target !== undefined && within(resolve(dir, target), [dir, ...writable]);
-			if (writes || allowedCommand(command, options.allowedCommands ?? [])) {
+			const yolo = options.yolo && !riskyCommand.test(command);
+			if (writes || yolo || allowedCommand(command, options.allowedCommands ?? [])) {
 				options.onAutoApprove?.(tool, input.tool_input as Record<string, unknown>);
 				return decide('allow');
 			}
 		}
 		if (askTools.includes(tool)) return decide('ask');
 		if (tool in fileAccess) {
+			if (options.yolo) return decide('allow');
 			const allowed = fileAccess[tool] == 'write' ? [dir, ...writable] : [dir, ...writable, ...readable];
 			const inside = toolPaths(tool, input.tool_input as Record<string, unknown>, dir).every(p => within(p, allowed));
 			return decide(inside ? 'allow' : 'ask');
