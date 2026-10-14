@@ -210,7 +210,7 @@ cli_auto
 							console.log(`${styleText('green', 'Starting')} ${lab.name}`);
 							try {
 								const result = await labs.lab(lab, {
-									...agentHandlers(),
+									...agentHandlers(undefined, tool => tool.startsWith('mcp__lab__')),
 									model: options.model,
 									force: options.force,
 									async onLabRunning(resources) {
@@ -880,8 +880,39 @@ function toolSummary(name: string, input: Record<string, unknown>): string {
 	return [name.replace(/^mcp__\w+__/, ''), detail ?? keys ?? point].filter(x => x).join(' ');
 }
 
-/** How the CLI answers Claude's questions and asks the student to approve tool calls */
-function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'approve' | 'onText' | 'onTool' | 'onAutoApprove'> {
+let clearActiveLine: (() => void) | undefined;
+
+/** Show text on the terminal's current line until anything else is written */
+function showActiveLine(text: string): void {
+	clearActiveLine?.();
+	const { stdout, stderr } = process;
+	const writeOut = stdout.write,
+		writeErr = stderr.write;
+	const clearing = (write: typeof writeOut) =>
+		function (this: NodeJS.WriteStream, ...args: Parameters<typeof writeOut>) {
+			clearActiveLine?.();
+			return write.apply(this, args);
+		} as typeof writeOut;
+
+	clearActiveLine = () => {
+		stdout.write = writeOut;
+		stderr.write = writeErr;
+		clearActiveLine = undefined;
+		stdout.write('\r\x1b[2K');
+	};
+	stdout.write = clearing(writeOut);
+	stderr.write = clearing(writeErr);
+	writeOut.call(stdout, text);
+}
+
+/**
+ * How the CLI answers Claude's questions and asks the student to approve tool calls.
+ * @param transient Whether a tool's calls are only shown until the next output, when writing to a terminal without `--debug`
+ */
+function agentHandlers(
+	course?: Course,
+	transient: (tool: string) => boolean = () => false
+): Pick<llm.AgentOptions, 'answer' | 'approve' | 'onText' | 'onTool' | 'onAutoApprove'> {
 	const sessionAllowed = new Set<string>();
 
 	return {
@@ -908,7 +939,10 @@ function agentHandlers(course?: Course): Pick<llm.AgentOptions, 'answer' | 'appr
 		},
 		onText: text => io.log(markdownToTerminal(text)),
 		onTool(name, input) {
-			if (!['AskUserQuestion', 'Bash'].includes(name) && !name.startsWith('mcp__eedu__')) io.log(dim(toolSummary(name, input)));
+			if (['AskUserQuestion', 'Bash'].includes(name) || name.startsWith('mcp__eedu__')) return;
+			const summary = toolSummary(name, input);
+			if (!process.stdout.isTTY || debugMode || !transient(name)) io.log(dim(summary));
+			else showActiveLine(dim(summary.replace(/\s+/g, ' ').slice(0, process.stdout.columns - 1)));
 		},
 		onAutoApprove(tool, input) {
 			const [first, ...rest] = String(input.command).split('\n');
