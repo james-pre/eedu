@@ -979,6 +979,7 @@ cli_auto
 
 		for (;;) {
 			console.log(styleText('dim', `Files are in ${result.dir} (estimated cost $${result.cost.toFixed(2)})`));
+			if (submitted) break;
 			const feedback = (await io.ask('Changes for Claude (leave empty to finish): ')).trim();
 			if (!feedback) break;
 			result = await auto.assignment(assignmentSources, a, { ...handlers, resume: result.sessionId, instructions: feedback });
