@@ -303,7 +303,7 @@ export interface Assignment {
 	vericite_enabled: boolean;
 	turnitin_settings: unknown;
 	grade_group_students_individually: boolean;
-	external_tool_tag_attributes: unknown;
+	external_tool_tag_attributes?: { url: string; new_tab: boolean };
 	peer_reviews: boolean;
 	automatic_peer_reviews: boolean;
 	peer_review_count: number;

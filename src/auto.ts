@@ -1,6 +1,6 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { Manager } from '@james-pre/config';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as z from 'zod';
@@ -20,6 +20,8 @@ import * as documents from './documents.js';
 import { courseGrades } from './grades.js';
 import { pluginDir, prompt, runAgent, within, type AgentOptions, type AgentResult } from './llm.js';
 import * as canvas from './platforms/canvas.js';
+import { quizResponses, quizText } from './platforms/canvas/answers.js';
+import * as quizzes from './platforms/canvas/quizzes.js';
 import type * as canvasTypes from './platforms/canvas.types.js';
 import { htmlToText, readText, toHTML } from './text.js';
 
@@ -148,7 +150,11 @@ export interface ToolEvents {
 /** Why a submit_assignment or post_discussion call can't go ahead because its files still have placeholders like `[TODO: ...]` */
 export async function unfinished(course: Course, tool: string, input: Record<string, any>): Promise<string | undefined> {
 	const files: unknown[] =
-		tool == 'submit_assignment' ? [input.text_file, ...(input.files ?? [])] : tool == 'post_discussion' ? [input.file] : [];
+		tool == 'submit_assignment'
+			? [input.text_file, ...(input.files ?? [])]
+			: tool == 'post_discussion' || tool == 'submit_quiz'
+				? [input.file]
+				: [];
 	const dir = courseDir(course);
 
 	const found: string[] = [];
@@ -194,12 +200,32 @@ export async function describeRequest(
 				? `Post ${input.file} to ${title}?`
 				: `Post ${input.file} as a reply to entry #${input.reply_to} in ${title}?`;
 		}
+		case 'mcp__eedu__submit_quiz': {
+			const a = await getAssignment(sources, input.assignment, course);
+			return `Turn in ${a.name} with the answers in ${input.file}?`;
+		}
 	}
+}
+
+/** The quiz behind a quiz assignment, as `canvas:<id>` */
+function quizAssignment(assignment: Assignment): string {
+	if (!assignment.types.includes('quiz') || !assignment.id.startsWith('canvas:'))
+		throw new Error(assignment.name + ' is not a New Quizzes quiz');
+	return assignment.id.slice('canvas:'.length);
 }
 
 export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}) {
 	const dir = courseDir(course);
 	const status = (text: string) => events.onStatus?.(text);
+	const openQuizzes = new Map<string, quizzes.OpenQuiz>();
+
+	const openQuiz = async (assignment: Assignment): Promise<quizzes.OpenQuiz> => {
+		const opened = openQuizzes.get(assignment.id);
+		if (opened) return opened;
+		const quiz = await quizzes.open(course, quizAssignment(assignment));
+		openQuizzes.set(assignment.id, quiz);
+		return quiz;
+	};
 
 	const path = (path: string, access: 'read' | 'write'): string => {
 		const full = resolve(dir, path);
@@ -416,11 +442,55 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 				return textResult(`Posted entry #${entry.id}`);
 			}
 		),
+
+		tool(
+			'open_quiz',
+			"Open a quiz assignment, starting the student's attempt or resuming it, and get every question with the IDs its answer uses. Answers aren't saved until submit_quiz.",
+			{ assignment: z.string().describe('Assignment ID, e.g. canvas:12345') },
+			async ({ assignment: id }) => {
+				const a = await getAssignment(sources, id, course);
+				status('Opening quiz ' + a.name);
+				try {
+					return textResult(quizText(await openQuiz(a)));
+				} catch (e) {
+					if (!(e instanceof quizzes.QuizError)) throw e;
+					return textResult(e.message, true);
+				}
+			}
+		),
+
+		tool(
+			'submit_quiz',
+			'Turn in a quiz with the answers in a Markdown file: a `## <position>` heading per question, then its answer in the format open_quiz gives. This ends the attempt. The student approves each submission.',
+			{
+				assignment: z.string().describe('Assignment ID, e.g. canvas:12345'),
+				file: z.string().describe('Answers file'),
+			},
+			async ({ assignment: id, file }) => {
+				const placeholders = await unfinished(course, 'submit_quiz', { file });
+				if (placeholders) return textResult(placeholders, true);
+				const a = await getAssignment(sources, id, course);
+				const quiz = await openQuiz(a);
+
+				let responses;
+				try {
+					responses = quizResponses(quiz, readFileSync(path(file, 'write'), 'utf8'));
+				} catch (e) {
+					return textResult(e instanceof Error ? e.message : String(e), true);
+				}
+
+				await quizzes.submit(quiz, responses);
+				openQuizzes.delete(a.id);
+				events.onSubmit?.();
+				status(`Turned in ${a.name} with ${file}`);
+				return textResult(`Turned in ${a.name} with ${responses.length} answers`);
+			}
+		),
 	];
 }
 
 /** Tools that act on the student's behalf, which always need their approval */
-const askTools = ['submit_assignment', 'post_discussion'];
+const askTools = ['submit_assignment', 'post_discussion', 'submit_quiz'];
 
 export interface AssignmentOptions extends Omit<
 	AgentOptions,

@@ -8,6 +8,7 @@ import type { AssignmentSource, Attachment, PulledAssignment, SubmissionType } f
 import { courseId, dataDir, school, uniqueCourseId, type Course } from '../data.js';
 import { onAdd, prompt, type DiscoverOptions } from '../discovery.js';
 import { renameCourse, type GradeSource } from '../grades.js';
+import { isQuizTool } from './canvas/quizzes.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { toHTML } from '../text.js';
 import { normalizeURL } from '../utils.js';
@@ -228,6 +229,11 @@ const submissionTypes: Record<types.Assignment['submission_types'][number], Subm
 
 const date = (value?: string | null) => (value ? new Date(value) : undefined);
 
+function typesOf(assignment: types.Assignment): SubmissionType[] {
+	const quiz = isQuizTool(assignment.external_tool_tag_attributes?.url);
+	return [...new Set(assignment.submission_types.map(t => (t == 'external_tool' && quiz ? 'quiz' : submissionTypes[t])))];
+}
+
 function toPulled(assignment: types.Assignment, category?: string): PulledAssignment {
 	const { submission } = assignment;
 	const state = submission?.workflow_state;
@@ -245,7 +251,7 @@ function toPulled(assignment: types.Assignment, category?: string): PulledAssign
 		status: state == 'graded' ? 'graded' : state == 'submitted' || state == 'pending_review' ? 'submitted' : 'unsubmitted',
 		late: !!submission?.late,
 		missing: !!submission?.missing,
-		types: [...new Set(assignment.submission_types.map(t => submissionTypes[t]))],
+		types: typesOf(assignment),
 		extensions: assignment.allowed_extensions?.length ? assignment.allowed_extensions : undefined,
 		url: assignment.html_url,
 	};
