@@ -1,6 +1,7 @@
 import $pkg from '../../../package.json' with { type: 'json' };
 import type { Course } from '../../data.js';
 import { api, data } from '../canvas.js';
+import { putRecords, type KinesisConfiguration } from './kinesis.js';
 
 /** Whether an external tool URL is New Quizzes */
 export function isQuizTool(url?: string): boolean {
@@ -31,8 +32,13 @@ interface ParticipantSession {
 export interface QuizSession {
 	id: string;
 	status: string;
+	start_at: string | null;
 	end_at: string | null;
 	attempt: number;
+	account_uuid: string;
+	root_account_uuid: string;
+	event_creation_token: string;
+	kinesis_credentials: KinesisConfiguration;
 	one_at_a_time_type: string;
 	allow_backtracking: boolean;
 	quiz: {
@@ -72,8 +78,13 @@ export interface OpenQuiz {
 	items: SessionItem[];
 	/** Practice quizzes and surveys aren't graded */
 	type?: string;
+	/** Saved answers by position */
+	responses: Map<number, ResponseValue>;
 	lti: { base: string; token: string; domain: string };
 	api: { host: string; token: string };
+	/** Identifies this client in the events quiz-api records, like a browser tab */
+	browserSessionId: string;
+	ipAddress: string | null;
 }
 
 /** Pull a value out of the `ENV` object Canvas puts in its pages */
@@ -170,7 +181,7 @@ const finished = ['submitted', 'needs_grading', 'graded', 'complete', 'completed
 
 /**
  * Start or resume the student's attempt at a New Quizzes assignment.
- * Refuses quizzes that need LockDown Browser, an access code, or a particular network, and won't start a timed attempt.
+ * Refuses quizzes that need LockDown Browser, an access code, or a particular network.
  */
 export async function open(course: Course, assignment: string): Promise<OpenQuiz> {
 	const html = await launchPage(course, assignment);
@@ -209,8 +220,6 @@ export async function open(course: Course, assignment: string): Promise<OpenQuiz
 
 	if (preview.quiz.require_student_access_code) throw new QuizError('This quiz requires an access code from the instructor');
 	if (preview.quiz.filter_ip_address && !preview.ip_is_allowed) throw new QuizError("This quiz can't be taken from this network");
-	if (preview.quiz.has_time_limit && preview.status != 'in_progress')
-		throw new QuizError('This quiz has a time limit, so eedu will not start it; start it yourself first');
 
 	const taking = await lti<ParticipantSession>(quiz, 'POST', `/participant_sessions/${resourceId}/take`, {
 		session_lock: participant.session_lock,
@@ -218,13 +227,101 @@ export async function open(course: Course, assignment: string): Promise<OpenQuiz
 	const taken = { api: { host: taking.host, token: taking.token } };
 	const id = taking.quiz_api_quiz_session_id;
 
-	const session = await quizApi<QuizSession>(taken, 'GET', `/quiz_sessions/${id}`);
-	if (session.one_at_a_time_type != 'none' && !session.allow_backtracking)
-		throw new QuizError("This quiz shows one question at a time without going back, which eedu doesn't support");
-
+	const session = await quizApi<QuizSession>(taken, 'POST', `/quiz_sessions/${id}/take`, {});
 	const items = await quizApi<SessionItem[]>(taken, 'GET', `/quiz_sessions/${id}/session_items`);
+	const saved = await quizApi<ResumeData[]>(taken, 'GET', `/quiz_sessions/${id}/session_item_responses/resume_data`);
+	const { ip } = await quizApi<{ ip: string | null }>(taken, 'GET', `/quiz_sessions/${id}/get_ip_address`).catch(() => ({ ip: null }));
 
-	return { attempt: String(resourceId), session, items, type: native.assignment_type, lti: quiz.lti, ...taken };
+	return {
+		attempt: String(resourceId),
+		session,
+		items,
+		type: native.assignment_type,
+		responses: new Map(
+			saved
+				.filter(response => response.user_response?.value != null)
+				.map(response => [response.position, response.user_response!.value])
+		),
+		lti: quiz.lti,
+		...taken,
+		browserSessionId: crypto.randomUUID(),
+		ipAddress: ip,
+	};
+}
+
+/** A saved answer, as quiz-api returns them when an attempt is resumed */
+interface ResumeData {
+	position: number;
+	item_id: string;
+	user_response?: { value: ResponseValue };
+}
+
+/** Whether each answer is final once saved, because the quiz shows one question at a time without going back */
+export function forwardOnly(quiz: OpenQuiz): boolean {
+	return quiz.session.one_at_a_time_type == 'question' && !quiz.session.allow_backtracking;
+}
+
+/** Kinesis credentials, refreshed when they're about to expire */
+async function kinesis(quiz: OpenQuiz): Promise<KinesisConfiguration> {
+	const configuration = quiz.session.kinesis_credentials;
+	if (new Date(configuration.credentials.expiration).getTime() - Date.now() > 60_000) return configuration;
+	quiz.session.kinesis_credentials = await quizApi<KinesisConfiguration>(
+		quiz,
+		'POST',
+		`/quiz_sessions/${quiz.session.id}/kinesis_credentials`,
+		{}
+	);
+	return quiz.session.kinesis_credentials;
+}
+
+/**
+ * Save the answer to one question, the way typing it into the quiz does.
+ * When the quiz only goes forward, this moves on and returns the next question, or null after the last one.
+ */
+export async function save(quiz: OpenQuiz, response: Response): Promise<SessionItem | null | undefined> {
+	const item = quiz.items.find(item => item.position == response.position);
+	if (!item) throw new QuizError(`The quiz has no question ${response.position}`);
+
+	if (forwardOnly(quiz)) {
+		const next = await quizApi<SessionItem | null>(
+			quiz,
+			'POST',
+			`/quiz_sessions/${quiz.session.id}/session_item_responses/single_response_submit`,
+			{
+				sessionItemResponse: { itemId: item.item.id, position: item.position, userResponse: { value: response.value } },
+			}
+		);
+		quiz.responses.set(item.position, response.value);
+		if (next && !quiz.items.some(existing => existing.position == next.position)) quiz.items.push(next);
+		return next;
+	}
+
+	const { session } = quiz;
+	const record = {
+		account_uuid: session.account_uuid,
+		event_creation_token: session.event_creation_token,
+		event_type: 'RESPONSE',
+		quiz_session_id: session.id,
+		root_account_uuid: session.root_account_uuid,
+		position: item.position,
+		item_id: item.item.id,
+		user_response: { value: response.value },
+		event_data: {
+			invalid: false,
+			user_agent: userAgent,
+			browser_session_id: quiz.browserSessionId,
+			client_timestamp: new Date(),
+			ip_address: quiz.ipAddress,
+			multiple_session_attempt: false,
+		},
+		created_at: `${new Date().toISOString()}|${performance.now()}`,
+	};
+
+	const configuration = await kinesis(quiz);
+	await putRecords(configuration, configuration.stream_identifiers.responses, [
+		{ data: JSON.stringify(record), partitionKey: `${session.id}|${session.account_uuid}` },
+	]);
+	quiz.responses.set(item.position, response.value);
 }
 
 /** What a student's answer to one item looks like, by interaction type */
@@ -235,10 +332,10 @@ export interface Response {
 	value: ResponseValue;
 }
 
-/** Turn in the attempt with these answers, which is final */
-export async function submit(quiz: OpenQuiz, responses: Response[]): Promise<void> {
+/** Turn in the attempt with its saved answers, which is final */
+export async function submit(quiz: OpenQuiz): Promise<void> {
 	const items = new Map(quiz.items.map(item => [item.position, item]));
-	const session_item_responses = responses.map(({ position, value }) => ({
+	const session_item_responses = [...quiz.responses].map(([position, value]) => ({
 		position,
 		itemId: items.get(position)!.item.id,
 		userResponse: { value },

@@ -1001,14 +1001,23 @@ cli_auto
 		'Allow file access, web requests, and Bash commands without asking, except for risky commands like sudo (implies -e)',
 		false
 	)
+	.option('--no-quiz-instructions', "Don't show Claude the instructions of quizzes")
 	.action(async (id, options) => {
 		const a = await resolveAssignment(id, options.course, { pending: true });
+
+		if (a.types.includes('quiz'))
+			io.log(
+				dim(
+					'Claude saves answers to your attempt as it goes, and you approve turning it in. A timed quiz keeps its timer running while Claude works.'
+				)
+			);
 
 		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
 			...agentHandlers(a.course),
 			model: options.model,
 			acceptEdits: options.acceptEdits || options.YOLO,
 			yolo: options.YOLO,
+			quizInstructions: options.quizInstructions,
 			onStatus: text => io.log(dim(text)),
 		};
 
@@ -1028,9 +1037,9 @@ cli_auto
 
 		if (a.types.includes('quiz')) {
 			console.log(
-				styleText('yellow', 'Review and edit the answers before turning in the quiz.'),
+				styleText('yellow', 'The answers are saved to your attempt but not turned in.'),
 				"Check your course's policy on AI use.",
-				`\nThen ask Claude to submit it with ${styleText('cyan', `eedu auto asgn ${a.id}`)}, or answer it in Canvas.`
+				`\nReview and turn it in from Canvas, or ask Claude to with ${styleText('cyan', `eedu auto asgn ${a.id}`)}.`
 			);
 			return;
 		}

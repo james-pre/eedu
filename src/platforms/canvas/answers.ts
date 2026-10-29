@@ -1,4 +1,4 @@
-import type { OpenQuiz, Response, ResponseValue, SessionItem } from './quizzes.js';
+import { forwardOnly, type OpenQuiz, type ResponseValue, type SessionItem } from './quizzes.js';
 import { htmlToText, toHTML } from '../../text.js';
 
 /** Item types that are only text to read, with nothing to answer */
@@ -35,7 +35,7 @@ function plain(value: unknown): unknown {
 	return value;
 }
 
-function itemText(item: SessionItem): string {
+function itemText(item: SessionItem, saved?: ResponseValue): string {
 	const { slug, name } = item.item.interaction_type;
 	const lines = [`## ${item.position}`, `Type: ${name} (${slug})`];
 
@@ -61,37 +61,48 @@ function itemText(item: SessionItem): string {
 		lines.push('', 'Interaction data:', '```json', JSON.stringify(plain(item.item.interaction_data), null, '\t'), '```');
 	}
 
-	return lines.join('\n');
-}
+	if (saved !== undefined)
+		lines.push('', 'Saved answer: ' + (typeof saved == 'string' && slug == 'essay' ? htmlToText(saved).trim() : JSON.stringify(saved)));
 
-/** The quiz as Markdown, with everything needed to answer it */
-export function quizText(quiz: OpenQuiz): string {
-	const { session } = quiz;
-	const lines = [
-		`# ${session.quiz.title}`,
-		'Type: ' + (quiz.type ?? session.quiz.quiz_type),
-		`Attempt: ${session.attempt}`,
-		session.end_at && 'Closes: ' + new Date(session.end_at).toLocaleString(),
-		session.quiz.has_time_limit && `Time limit: ${Math.round(session.quiz.session_time_limit_in_seconds / 60)} minutes`,
-		'',
-		session.quiz.instructions ? htmlToText(session.quiz.instructions).trim() : '',
-		'',
-		...quiz.items.map(itemText),
-	];
-	return lines.filter(line => line !== false && line !== null).join('\n');
+	return lines.join('\n');
 }
 
 /** Whether a quiz item needs an answer */
 export function answerable(item: SessionItem): boolean {
-	return !readOnlyTypes.includes(item.item.interaction_type.slug);
+	return !readOnlyTypes.includes(item.item.interaction_type.slug) && !unsupportedTypes.includes(item.item.interaction_type.slug);
 }
 
-/** The answer under each `## <position>` heading of an answers file */
-export function parseAnswers(text: string): Map<number, string> {
-	const answers = new Map<number, string>();
-	const sections = text.split(/^##[ \t]+(\d+)\b.*$/m);
-	for (let i = 1; i < sections.length; i += 2) answers.set(Number(sections[i]), sections[i + 1].trim());
-	return answers;
+/** How long is left on a timed attempt, in words */
+export function timeLeft(quiz: OpenQuiz): string | undefined {
+	if (!quiz.session.quiz.has_time_limit || !quiz.session.end_at) return;
+	const minutes = Math.max(0, Math.floor((new Date(quiz.session.end_at).getTime() - Date.now()) / 60_000));
+	return `${minutes} minute${minutes == 1 ? '' : 's'} left, until ${new Date(quiz.session.end_at).toLocaleTimeString()}`;
+}
+
+export interface QuizTextOptions {
+	/** Include the quiz's instructions */
+	instructions?: boolean;
+}
+
+/** The quiz as Markdown, with everything needed to answer it */
+export function quizText(quiz: OpenQuiz, options: QuizTextOptions = {}): string {
+	const { session } = quiz;
+	const remaining = timeLeft(quiz);
+	const lines = [
+		`# ${session.quiz.title}`,
+		'Type: ' + (quiz.type ?? session.quiz.quiz_type),
+		`Attempt: ${session.attempt}`,
+		session.end_at && !remaining && 'Closes: ' + new Date(session.end_at).toLocaleString(),
+		remaining
+			&& `Timed: ${Math.round(session.quiz.session_time_limit_in_seconds / 60)} minutes, ${remaining}. The timer keeps running, so save each answer as soon as it's ready; anything unsaved when time runs out is lost.`,
+		forwardOnly(quiz)
+			&& 'One question at a time without going back: each saved answer is final, and saving it shows the next question.',
+		'',
+		options.instructions !== false && session.quiz.instructions ? htmlToText(session.quiz.instructions).trim() : '',
+		'',
+		...quiz.items.map(item => itemText(item, quiz.responses.get(item.position))),
+	];
+	return lines.filter(line => typeof line == 'string').join('\n');
 }
 
 function ids(list: unknown): string[] | undefined {
@@ -131,49 +142,33 @@ function invalid(item: SessionItem, value: ResponseValue): string | undefined {
 }
 
 /**
- * The responses in an answers file, checked against the quiz's items.
- * @throws When an answer is missing, isn't valid JSON, or doesn't fit its item
+ * The value to save for an answer: essays are Markdown, everything else is JSON.
+ * @throws When the answer doesn't fit the item
  */
-export function quizResponses(quiz: OpenQuiz, text: string): Response[] {
-	const answers = parseAnswers(text);
-	const problems: string[] = [];
-	const responses: Response[] = [];
+export function parseAnswer(item: SessionItem, answer: string): ResponseValue {
+	const { slug } = item.item.interaction_type;
+	if (readOnlyTypes.includes(slug)) throw new Error(`Question ${item.position} is text to read, with nothing to answer`);
+	if (unsupportedTypes.includes(slug)) throw new Error(`eedu can't answer ${slug} questions`);
+	if (!answer.trim()) throw new Error('The answer is empty');
 
-	for (const position of answers.keys())
-		if (!quiz.items.some(item => item.position == position)) problems.push(`${position}: the quiz has no question ${position}`);
-
-	for (const item of quiz.items) {
-		const { slug } = item.item.interaction_type;
-		const answer = answers.get(item.position);
-		if (!answerable(item)) continue;
-		if (unsupportedTypes.includes(slug)) {
-			if (answer) problems.push(`${item.position}: eedu can't answer ${slug} questions`);
-			continue;
-		}
-		if (!answer) {
-			problems.push(`${item.position}: no answer`);
-			continue;
-		}
-
-		if (slug == 'essay') {
-			const rich = item.item.interaction_data.rce !== false;
-			responses.push({ position: item.position, value: toHTML({ content: answer, format: rich ? 'markdown' : 'text' }).trim() });
-			continue;
-		}
-
-		let value: ResponseValue;
-		try {
-			value = JSON.parse(answer.replace(/^```\w*\n([\s\S]*?)\n```$/, '$1'));
-		} catch {
-			problems.push(`${item.position}: not valid JSON`);
-			continue;
-		}
-
-		const reason = invalid(item, value);
-		if (reason) problems.push(`${item.position}: ${reason}`);
-		else responses.push({ position: item.position, value });
+	if (slug == 'essay') {
+		const rich = item.item.interaction_data.rce !== false;
+		return toHTML({ content: answer.trim(), format: rich ? 'markdown' : 'text' }).trim();
 	}
 
-	if (problems.length) throw new Error("The answers can't be submitted yet:\n" + problems.join('\n'));
-	return responses;
+	let value: ResponseValue;
+	try {
+		value = JSON.parse(answer.trim().replace(/^```\w*\n([\s\S]*?)\n```$/, '$1'));
+	} catch {
+		throw new Error('The answer is not valid JSON');
+	}
+
+	const reason = invalid(item, value);
+	if (reason) throw new Error(reason);
+	return value;
+}
+
+/** Positions of the questions that still need an answer */
+export function unanswered(quiz: OpenQuiz): number[] {
+	return quiz.items.filter(item => answerable(item) && !quiz.responses.has(item.position)).map(item => item.position);
 }

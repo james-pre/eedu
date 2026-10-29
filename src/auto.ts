@@ -20,7 +20,7 @@ import * as documents from './documents.js';
 import { courseGrades } from './grades.js';
 import { pluginDir, prompt, runAgent, within, type AgentOptions, type AgentResult } from './llm.js';
 import * as canvas from './platforms/canvas.js';
-import { quizResponses, quizText } from './platforms/canvas/answers.js';
+import { parseAnswer, quizText, timeLeft, unanswered } from './platforms/canvas/answers.js';
 import * as quizzes from './platforms/canvas/quizzes.js';
 import type * as canvasTypes from './platforms/canvas/types.js';
 import { htmlToText, readText, toHTML } from './text.js';
@@ -150,11 +150,7 @@ export interface ToolEvents {
 /** Why a submit_assignment or post_discussion call can't go ahead because its files still have placeholders like `[TODO: ...]` */
 export async function unfinished(course: Course, tool: string, input: Record<string, any>): Promise<string | undefined> {
 	const files: unknown[] =
-		tool == 'submit_assignment'
-			? [input.text_file, ...(input.files ?? [])]
-			: tool == 'post_discussion' || tool == 'submit_quiz'
-				? [input.file]
-				: [];
+		tool == 'submit_assignment' ? [input.text_file, ...(input.files ?? [])] : tool == 'post_discussion' ? [input.file] : [];
 	const dir = courseDir(course);
 
 	const found: string[] = [];
@@ -202,7 +198,7 @@ export async function describeRequest(
 		}
 		case 'mcp__eedu__submit_quiz': {
 			const a = await getAssignment(sources, input.assignment, course);
-			return `Turn in ${a.name} with the answers in ${input.file}?`;
+			return `Turn in ${a.name}?` + (input.allow_unanswered ? ' Some questions are unanswered.' : '');
 		}
 	}
 }
@@ -214,7 +210,12 @@ function quizAssignment(assignment: Assignment): string {
 	return assignment.id.slice('canvas:'.length);
 }
 
-export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}) {
+export interface ToolOptions {
+	/** Show Claude the instructions of quizzes it opens */
+	quizInstructions?: boolean;
+}
+
+export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}, options: ToolOptions = {}) {
 	const dir = courseDir(course);
 	const status = (text: string) => events.onStatus?.(text);
 	const openQuizzes = new Map<string, quizzes.OpenQuiz>();
@@ -224,7 +225,14 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 		if (opened) return opened;
 		const quiz = await quizzes.open(course, quizAssignment(assignment));
 		openQuizzes.set(assignment.id, quiz);
+		const remaining = timeLeft(quiz);
+		status(`Opened ${assignment.name}` + (remaining ? `, a timed quiz with ${remaining}` : ''));
 		return quiz;
+	};
+
+	const quizError = (e: unknown) => {
+		if (e instanceof quizzes.QuizError) return textResult(e.message, true);
+		throw e;
 	};
 
 	const path = (path: string, access: 'read' | 'write'): string => {
@@ -445,45 +453,99 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 
 		tool(
 			'open_quiz',
-			"Open a quiz assignment, starting the student's attempt or resuming it, and get every question with the IDs its answer uses. Answers aren't saved until submit_quiz.",
+			"Open a quiz assignment, starting the student's attempt or resuming it, and get its questions with the IDs answers use and any answers already saved.",
 			{ assignment: z.string().describe('Assignment ID, e.g. canvas:12345') },
 			async ({ assignment: id }) => {
 				const a = await getAssignment(sources, id, course);
-				status('Opening quiz ' + a.name);
 				try {
-					return textResult(quizText(await openQuiz(a)));
+					return textResult(quizText(await openQuiz(a), { instructions: options.quizInstructions }));
 				} catch (e) {
-					if (!(e instanceof quizzes.QuizError)) throw e;
-					return textResult(e.message, true);
+					return quizError(e);
+				}
+			}
+		),
+
+		tool(
+			'answer_question',
+			'Save the answer to one quiz question, replacing any earlier answer, in the format open_quiz gives. Answers are saved to the attempt but not turned in.',
+			{
+				assignment: z.string().describe('Assignment ID, e.g. canvas:12345'),
+				position: z.number().int().describe('Question position'),
+				answer: z.string().describe('Markdown for essays, JSON for everything else'),
+			},
+			async ({ assignment: id, position, answer }) => {
+				const placeholders = documents.textPlaceholders(answer);
+				if (placeholders.length)
+					return textResult("The answer still has placeholders, so it can't be saved:\n" + placeholders.join('\n'), true);
+
+				const a = await getAssignment(sources, id, course);
+				try {
+					const quiz = await openQuiz(a);
+					const item = quiz.items.find(item => item.position == position);
+					if (!item) return textResult(`${a.name} has no question ${position}`, true);
+
+					let value;
+					try {
+						value = parseAnswer(item, answer);
+					} catch (e) {
+						return textResult(`Question ${position}: ` + (e instanceof Error ? e.message : String(e)), true);
+					}
+
+					const next = await quizzes.save(quiz, { position, value });
+					status(`Saved the answer to question ${position} of ${a.name}`);
+
+					const left = unanswered(quiz);
+					const remaining = timeLeft(quiz);
+					const lines = [
+						`Saved question ${position}.`,
+						left.length ? 'Unanswered: ' + left.join(', ') : 'Every question is answered.',
+						remaining && `Time: ${remaining}`,
+					];
+					if (next)
+						lines.push(
+							'',
+							'Next question:',
+							'',
+							quizText({ ...quiz, items: [next] }, { instructions: false })
+								.split('\n## ')
+								.slice(1)
+								.map(text => '## ' + text)
+								.join('\n')
+						);
+					else if (next === null) lines.push('That was the last question.');
+					return textResult(lines.filter(line => typeof line == 'string').join('\n'));
+				} catch (e) {
+					return quizError(e);
 				}
 			}
 		),
 
 		tool(
 			'submit_quiz',
-			'Turn in a quiz with the answers in a Markdown file: a `## <position>` heading per question, then its answer in the format open_quiz gives. This ends the attempt. The student approves each submission.',
+			'Turn in a quiz with its saved answers. This ends the attempt. The student approves each submission.',
 			{
 				assignment: z.string().describe('Assignment ID, e.g. canvas:12345'),
-				file: z.string().describe('Answers file'),
+				allow_unanswered: z.boolean().optional().describe('Turn it in even though some questions have no answer'),
 			},
-			async ({ assignment: id, file }) => {
-				const placeholders = await unfinished(course, 'submit_quiz', { file });
-				if (placeholders) return textResult(placeholders, true);
+			async ({ assignment: id, allow_unanswered }) => {
 				const a = await getAssignment(sources, id, course);
-				const quiz = await openQuiz(a);
-
-				let responses;
 				try {
-					responses = quizResponses(quiz, readFileSync(path(file, 'write'), 'utf8'));
-				} catch (e) {
-					return textResult(e instanceof Error ? e.message : String(e), true);
-				}
+					const quiz = await openQuiz(a);
+					const left = unanswered(quiz);
+					if (left.length && !allow_unanswered)
+						return textResult(
+							`These questions have no answer yet: ${left.join(', ')}. Answer them, or set allow_unanswered.`,
+							true
+						);
 
-				await quizzes.submit(quiz, responses);
-				openQuizzes.delete(a.id);
-				events.onSubmit?.();
-				status(`Turned in ${a.name} with ${file}`);
-				return textResult(`Turned in ${a.name} with ${responses.length} answers`);
+					await quizzes.submit(quiz);
+					openQuizzes.delete(a.id);
+					events.onSubmit?.();
+					status('Turned in ' + a.name);
+					return textResult(`Turned in ${a.name} with ${quiz.responses.size} answers`);
+				} catch (e) {
+					return quizError(e);
+				}
 			}
 		),
 	];
@@ -499,6 +561,8 @@ export interface AssignmentOptions extends Omit<
 	/** Extra instructions from the student, or their feedback when continuing a session */
 	instructions?: string;
 	onStatus?: ToolEvents['onStatus'];
+	/** Show Claude the instructions of quizzes it opens, true by default */
+	quizInstructions?: boolean;
 }
 
 export interface AssignmentResult extends AgentResult {
@@ -516,7 +580,12 @@ export async function assignment(sources: AssignmentSource[], a: Assignment, opt
 	const dir = courseDir(a.course);
 	mkdirSync(dir, { recursive: true });
 	let submitted = false;
-	const tools = eeduTools(sources, a.course, { onStatus: options.onStatus, onSubmit: () => (submitted = true) });
+	const tools = eeduTools(
+		sources,
+		a.course,
+		{ onStatus: options.onStatus, onSubmit: () => (submitted = true) },
+		{ quizInstructions: options.quizInstructions }
+	);
 
 	const text = options.resume
 		? (options.instructions ?? '')
