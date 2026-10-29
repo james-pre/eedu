@@ -22,7 +22,7 @@ import { pluginDir, prompt, runAgent, within, type AgentOptions, type AgentResul
 import * as canvas from './platforms/canvas.js';
 import { quizResponses, quizText } from './platforms/canvas/answers.js';
 import * as quizzes from './platforms/canvas/quizzes.js';
-import type * as canvasTypes from './platforms/canvas.types.js';
+import type * as canvasTypes from './platforms/canvas/types.js';
 import { htmlToText, readText, toHTML } from './text.js';
 
 export const AutoData = z.object({

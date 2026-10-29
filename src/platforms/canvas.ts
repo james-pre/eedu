@@ -12,7 +12,7 @@ import { isQuizTool } from './canvas/quizzes.js';
 import { discover as discoverZybooks } from './zybooks.js';
 import { toHTML } from '../text.js';
 import { normalizeURL } from '../utils.js';
-import type * as types from './canvas.types.js';
+import type * as types from './canvas/types.js';
 
 export const CanvasData = z
 	.object({

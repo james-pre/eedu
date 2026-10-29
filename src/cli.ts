@@ -16,7 +16,7 @@ import * as qemu from './platforms/qemu.js';
 import * as zybooks from './platforms/zybooks.js';
 import * as grades from './grades.js';
 import * as llm from './llm.js';
-import type * as canvasTypes from './platforms/canvas.types.js';
+import type * as canvasTypes from './platforms/canvas/types.js';
 import { htmlToText, markdownToTerminal, readText, textFormats, toHTML, type Text } from './text.js';
 
 const cli = new Command('eedu').version($pkg.version).description($pkg.description);
