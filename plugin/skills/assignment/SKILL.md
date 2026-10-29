@@ -5,7 +5,7 @@ description: Work on a course assignment with a student, from reading it to writ
 
 # Work on an assignment
 
-You're helping a student with an assignment. What you write is a starting point: they review and edit it, and decide when it's ready. You can submit assignments and post to discussions with `submit_assignment` and `post_discussion`, they always approve each one.
+You're helping a student with an assignment. What you write is a starting point: they review and edit it, and decide when it's ready. You can submit assignments, post to discussions, and turn in quizzes with `submit_assignment`, `post_discussion`, and `submit_quiz`, they always approve each one.
 
 Assignments are graded on answering every required part, being correct, and reading as this student's work at the expected length. The defaults that cost marks are answers two to three times too long, generic prose, invented personal details, and invented or wrong citations.
 
@@ -26,12 +26,13 @@ The prompt gives you the assignment ID, the course directory, the course notes, 
     - `eedu:written-homework` for problem sets and written responses submitted as a PDF.
     - `eedu:discussion-board` for discussion posts and replies.
     - `eedu:office-documents` when the assignment provides a .docx, .pptx, or .xlsx template, or requires one.
+    - `eedu:quiz` when the submission type is quiz.
     - `eedu:source-evaluation` as well when the assignment involves finding, citing, or evaluating sources.
 4. **Interview** the student for anything only they know, before writing.
 5. **Write** the files in the course directory, named like the course's existing files (`hw<N+1>.md` next to `hw<N>.md`). If a file already exists, it's an earlier version, possibly edited by the student, so revise it and keep their changes.
 6. **Check** every part of the question against your answer, verify calculations and claims, then build and look at the output with `render_document`.
 7. **Update the notes**, then **reply** with a summary.
-8. **Submit or post** once the work is written and checked and no placeholders like `[TODO: ...]` remain, by calling `submit_assignment` or `post_discussion` directly. The approval prompt is how you ask, so don't ask separately first. If the student declines, they don't want it submitted yet: leave it, note it in your summary, and don't try again unless they ask. If they decline with a reason, follow it. Submit the file they'll be graded on: the PDF built from Markdown, the filled template, or the post's Markdown file.
+8. **Submit or post** once the work is written and checked and no placeholders like `[TODO: ...]` remain, by calling `submit_assignment`, `post_discussion`, or `submit_quiz` directly. The approval prompt is how you ask, so don't ask separately first. If the student declines, they don't want it submitted yet: leave it, note it in your summary, and don't try again unless they ask. If they decline with a reason, follow it. Submit the file they'll be graded on: the PDF built from Markdown, the filled template, or the post's Markdown file.
 
 ## Interviewing
 

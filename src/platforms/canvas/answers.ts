@@ -27,7 +27,11 @@ function plain(value: unknown): unknown {
 	if (typeof value == 'string') return /<\w+[^>]*>/.test(value) ? htmlToText(value).trim() : value;
 	if (Array.isArray(value)) return value.map(plain);
 	if (value && typeof value == 'object')
-		return Object.fromEntries(Object.entries(value).filter(([key]) => key != 'userResponse').map(([key, item]) => [key, plain(item)]));
+		return Object.fromEntries(
+			Object.entries(value)
+				.filter(([key]) => key != 'userResponse')
+				.map(([key, item]) => [key, plain(item)])
+		);
 	return value;
 }
 
@@ -36,7 +40,14 @@ function itemText(item: SessionItem): string {
 	const lines = [`## ${item.position}`, `Type: ${name} (${slug})`];
 
 	if (readOnlyTypes.includes(slug)) lines[1] += ', nothing to answer';
-	else lines.push(`Points: ${item.points_possible}`, 'Answer: ' + (unsupportedTypes.includes(slug) ? "not supported by eedu, leave it out" : (answerFormats[slug] ?? 'see the interaction data')));
+	else
+		lines.push(
+			`Points: ${item.points_possible}`,
+			'Answer: '
+				+ (unsupportedTypes.includes(slug)
+					? 'not supported by eedu, leave it out'
+					: (answerFormats[slug] ?? 'see the interaction data'))
+		);
 
 	const stimulus = item.stimulus?.body ?? item.stimulus?.item_body;
 	if (stimulus) lines.push('', '### Passage' + (item.stimulus?.title ? ': ' + item.stimulus.title : ''), '', htmlToText(stimulus).trim());

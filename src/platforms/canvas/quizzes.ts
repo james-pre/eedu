@@ -160,7 +160,8 @@ async function quizApi<T>(quiz: Pick<OpenQuiz, 'api'>, method: string, endpoint:
 	});
 	if (response.status == 204) return null as T;
 	const json: any = await response.json().catch(() => ({}));
-	if (!response.ok) throw new QuizError(json.errors?.[0]?.message ?? json.error ?? `${method} ${endpoint} failed: ` + response.statusText);
+	if (!response.ok)
+		throw new QuizError(json.errors?.[0]?.message ?? json.error ?? `${method} ${endpoint} failed: ` + response.statusText);
 	return json;
 }
 

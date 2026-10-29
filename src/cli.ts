@@ -1026,6 +1026,15 @@ cli_auto
 
 		if (submitted) return;
 
+		if (a.types.includes('quiz')) {
+			console.log(
+				styleText('yellow', 'Review and edit the answers before turning in the quiz.'),
+				"Check your course's policy on AI use.",
+				`\nThen ask Claude to submit it with ${styleText('cyan', `eedu auto asgn ${a.id}`)}, or answer it in Canvas.`
+			);
+			return;
+		}
+
 		console.log(
 			styleText('yellow', 'Review and edit the assignment before submitting it.'),
 			"Check your course's policy on AI use and disclose it as required.",
