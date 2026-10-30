@@ -217,6 +217,8 @@ function quizAssignment(assignment: Assignment): string {
 export interface ToolOptions {
 	/** Show Claude the instructions of quizzes it opens */
 	quizInstructions?: boolean;
+	/** Ask the student for a quiz's access code, which Claude never sees */
+	accessCode?: quizzes.OpenOptions['accessCode'];
 }
 
 export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}, options: ToolOptions = {}) {
@@ -227,7 +229,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 	const openQuiz = async (assignment: Assignment): Promise<quizzes.OpenQuiz> => {
 		const opened = openQuizzes.get(assignment.id);
 		if (opened) return opened;
-		const quiz = await quizzes.open(course, quizAssignment(assignment));
+		const quiz = await quizzes.open(course, quizAssignment(assignment), { accessCode: options.accessCode });
 		openQuizzes.set(assignment.id, quiz);
 		const remaining = timeLeft(quiz);
 		status(`Opened ${assignment.name}` + (remaining ? `, a timed quiz with ${remaining}` : ''));
@@ -587,6 +589,7 @@ export interface AssignmentOptions extends Omit<
 	onStatus?: ToolEvents['onStatus'];
 	/** Show Claude the instructions of quizzes it opens, true by default */
 	quizInstructions?: boolean;
+	accessCode?: ToolOptions['accessCode'];
 }
 
 export interface AssignmentResult extends AgentResult {
@@ -608,7 +611,7 @@ export async function assignment(sources: AssignmentSource[], a: Assignment, opt
 		sources,
 		a.course,
 		{ onStatus: options.onStatus, onSubmit: () => (submitted = true) },
-		{ quizInstructions: options.quizInstructions }
+		{ quizInstructions: options.quizInstructions, accessCode: options.accessCode }
 	);
 
 	const text = options.resume

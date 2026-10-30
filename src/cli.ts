@@ -1078,6 +1078,8 @@ cli_auto
 			acceptEdits: options.acceptEdits || options.YOLO,
 			yolo: options.YOLO,
 			quizInstructions: options.quizInstructions,
+			accessCode: async (quiz, rejected) =>
+				await io.ask(`${rejected ? 'That access code was rejected. ' : ''}Access code for ${quiz} (leave empty to skip): `),
 			onStatus: text => io.log(dim(text)),
 		};
 

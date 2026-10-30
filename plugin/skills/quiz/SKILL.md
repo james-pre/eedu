@@ -7,7 +7,7 @@ description: Answer a Canvas New Quizzes quiz question by question, saving each 
 
 `open_quiz` starts the student's attempt, or resumes the one in progress, and returns its questions with any answers already saved. `answer_question` saves one answer to the attempt, the same as typing it into the quiz; the student sees it when they open the quiz in Canvas. `submit_quiz` turns the attempt in, which can't be undone.
 
-eedu refuses quizzes that need LockDown Browser, an access code, or a particular network. Tell the student when `open_quiz` refuses; don't look for a way around it.
+eedu refuses quizzes that need LockDown Browser or a particular network. For a quiz with an access code, eedu asks the student for it directly. Never ask for the code yourself. Tell the student when `open_quiz` refuses; don't look for a way around it.
 
 ## Content
 

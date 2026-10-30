@@ -35,6 +35,7 @@ export interface QuizSession {
 	start_at: string | null;
 	end_at: string | null;
 	attempt: number;
+	accepted_student_access_code: boolean;
 	account_uuid: string;
 	root_account_uuid: string;
 	event_creation_token: string;
@@ -179,11 +180,19 @@ async function quizApi<T>(quiz: Pick<OpenQuiz, 'api'>, method: string, endpoint:
 /** Statuses of an attempt that has been turned in */
 const finished = ['submitted', 'needs_grading', 'graded', 'complete', 'completed'];
 
+/** Wrong access codes tried before giving up, since quiz-api throttles them */
+const accessCodeAttempts = 3;
+
+export interface OpenOptions {
+	/** Ask the student for the quiz's access code, resolving to nothing to give up */
+	accessCode?(quiz: string, rejected: boolean): Promise<string | undefined>;
+}
+
 /**
  * Start or resume the student's attempt at a New Quizzes assignment.
- * Refuses quizzes that need LockDown Browser, an access code, or a particular network.
+ * Refuses quizzes that need LockDown Browser or a particular network, and ones that need an access code the student doesn't give.
  */
-export async function open(course: Course, assignment: string): Promise<OpenQuiz> {
+export async function open(course: Course, assignment: string, options: OpenOptions = {}): Promise<OpenQuiz> {
 	const html = await launchPage(course, assignment);
 	const launch = envValue(html, 'NEW_QUIZZES') as { params: Record<string, string>; signature: string } | undefined;
 	const account = envValue(html, 'ACCOUNT_ID');
@@ -212,14 +221,20 @@ export async function open(course: Course, assignment: string): Promise<OpenQuiz
 	const participant = await lti<ParticipantSession>(quiz, 'GET', `/participant_sessions/${resourceId}`);
 	if (finished.includes(participant.participant_session.status)) throw new QuizError('This quiz has already been submitted');
 
-	const preview = await quizApi<QuizSession>(
-		{ api: { host: participant.host, token: participant.token } },
-		'GET',
-		`/quiz_sessions/${participant.quiz_api_quiz_session_id}`
-	);
+	const shown = { api: { host: participant.host, token: participant.token } };
+	const preview = await quizApi<QuizSession>(shown, 'GET', `/quiz_sessions/${participant.quiz_api_quiz_session_id}`);
 
-	if (preview.quiz.require_student_access_code) throw new QuizError('This quiz requires an access code from the instructor');
 	if (preview.quiz.filter_ip_address && !preview.ip_is_allowed) throw new QuizError("This quiz can't be taken from this network");
+
+	for (let tries = 0; preview.quiz.require_student_access_code && !preview.accepted_student_access_code; tries++) {
+		if (tries == accessCodeAttempts) throw new QuizError('The access code was rejected ' + tries + ' times');
+		const code = (await options.accessCode?.(preview.quiz.title, tries > 0))?.trim();
+		if (!code) throw new QuizError('This quiz requires an access code from the instructor');
+		const checked = await quizApi<QuizSession>(shown, 'POST', `/quiz_sessions/${preview.id}/submit_student_access_code`, {
+			accessCode: code,
+		});
+		preview.accepted_student_access_code = checked.accepted_student_access_code;
+	}
 
 	const taking = await lti<ParticipantSession>(quiz, 'POST', `/participant_sessions/${resourceId}/take`, {
 		session_lock: participant.session_lock,
