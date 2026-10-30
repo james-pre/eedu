@@ -145,6 +145,9 @@ export interface ModuleItem {
 
 	title: string;
 	type: 'File' | 'Page' | 'Discussion' | 'Assignment' | 'Quiz' | 'SubHeader' | 'ExternalUrl' | 'ExternalTool';
+	/** The ID of the file, assignment, or other content, except for pages */
+	content_id?: number;
+	page_url?: string;
 	external_url?: string;
 }
 

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import { dataDir, inProgress, school, type Course } from './data.js';
-import { prompt, select } from './discovery.js';
+import { select } from './discovery.js';
 
 function parseScore(text: string): number {
 	if (text.endsWith('%')) return Number(text.slice(0, -1)) / 100;
@@ -40,7 +40,10 @@ export const Mode = z.literal(['points', 'average']);
 export type Mode = z.infer<typeof Mode>;
 
 export const Category = z.object({
-	weight: Weight,
+	/** Omitted until it's known */
+	weight: Weight.optional(),
+	/** Set when the weight or dropped count was changed by hand, so pulling keeps them */
+	edited: z.boolean().default(false),
 	mode: Mode.default('points'),
 	dropped: z.int().nonnegative().default(0),
 	/** How many assignments the category will have, so ones that haven't been posted yet count as unknown */
@@ -81,8 +84,10 @@ function edit(modify: (saved: SavedGrades) => void) {
 	store.replaceFile(path, saved as z.input<typeof Grades>);
 }
 
-export interface CategoryStats extends Category {
+export interface CategoryStats extends Omit<Category, 'weight'> {
 	name: string;
+	/** 0 when the category's weight isn't known */
+	weight: number;
 	mean: number;
 	err: number;
 	unknowns: number;
@@ -96,7 +101,7 @@ export interface CategoryStats extends Category {
  * A category without any counted scores is entirely unknown.
  */
 export function categoryStats(name: string, category: Category): CategoryStats {
-	const { weight, dropped, mode, expected = 0 } = category;
+	const { weight = 0, dropped, mode, expected = 0 } = category;
 
 	const scores = Object.values(category.scores)
 		.filter(item => !item.ignored && item.possible > 0)
@@ -120,6 +125,7 @@ export function categoryStats(name: string, category: Category): CategoryStats {
 	return {
 		...category,
 		name,
+		weight,
 		mean: possible ? (weight * (earned + unknownPossible / 2)) / possible : weight / 2,
 		err: possible ? (weight * unknownPossible) / 2 / possible : weight / 2,
 		predicted: knownPossible ? (weight * earned) / knownPossible : 0,
@@ -212,44 +218,42 @@ export interface GradeChange {
 	previous?: Item;
 }
 
-async function askWeight(course: Course, category: string): Promise<number> {
-	for (;;) {
-		const answer = await prompt(`Weight of ${category} in ${course.name}: `);
-		const result = Weight.safeParse(answer);
-		if (result.success) return result.data;
-		io.warn('Invalid weight: ' + z.prettifyError(result.error));
-	}
+export interface PullResult {
+	/** Grades that are new or whose score changed, excluding ignored ones */
+	changes: GradeChange[];
+	/** The categories each course's platforms reported, by course ID */
+	pulled: Map<string, PulledCategory[]>;
 }
 
 /**
- * Pull grades for courses in progress (or all courses when `allTerms` is set) and save them.
- * Asks for the weight of new categories when the source doesn't know it.
+ * Pull grades for `courses` and save them.
+ * Weights and dropped counts follow the source unless they were edited, and categories the source doesn't weight are left without one.
  * Grades the user moved stay in their category, others follow the source's category.
- * @returns Grades that are new or whose score changed, excluding ignored ones.
  */
-export async function pull(sources: GradeSource[], allTerms: boolean = false): Promise<GradeChange[]> {
+export async function pull(sources: GradeSource[], courses: Course[]): Promise<PullResult> {
 	const changes: GradeChange[] = [];
+	const pulledCourses = new Map<string, PulledCategory[]>();
 
-	for (const course of school.data.courses) {
-		if (!allTerms && !inProgress(course)) continue;
-
+	for (const course of courses) {
 		for (const source of sources) {
 			if (!source.has(course)) continue;
 
 			const categories: Record<string, Partial<z.input<typeof Category>>> = {};
 			const patch = (name: string) => (categories[name] ??= {});
 			const moves: { id: string; from: string }[] = [];
+			const pulledCategories = await source.pull(course);
+			pulledCourses.set(course.id, [...(pulledCourses.get(course.id) ?? []), ...pulledCategories]);
 
-			for (const pulled of await source.pull(course)) {
+			for (const pulled of pulledCategories) {
 				const local = data.courses[course.id]?.categories[pulled.name];
 				const meta: Partial<z.input<typeof Category>> = {};
 
-				if (pulled.dropped !== undefined && pulled.dropped != (local?.dropped ?? 0)) meta.dropped = pulled.dropped;
+				if (!local?.edited) {
+					if (pulled.dropped !== undefined && pulled.dropped != (local?.dropped ?? 0)) meta.dropped = pulled.dropped;
+					if (pulled.weight !== undefined && pulled.weight != local?.weight) meta.weight = pulled.weight;
+				}
 
-				if (pulled.weight !== undefined && pulled.weight != local?.weight) meta.weight = pulled.weight;
-				else if (!local && pulled.weight === undefined) meta.weight = await askWeight(course, pulled.name);
-
-				if (Object.keys(meta).length) Object.assign(patch(pulled.name), meta);
+				if (Object.keys(meta).length || !local) Object.assign(patch(pulled.name), meta);
 
 				for (const { id: itemId, name, score, possible } of pulled.scores) {
 					const id = `${source.name}:${itemId}`;
@@ -278,7 +282,14 @@ export async function pull(sources: GradeSource[], allTerms: boolean = false): P
 		}
 	}
 
-	return changes;
+	return { changes, pulled: pulledCourses };
+}
+
+/** Names of a course's categories whose weight isn't known */
+export function unweighted(course: string): string[] {
+	return Object.entries(data.courses[course]?.categories ?? {})
+		.filter(([, category]) => category.weight === undefined)
+		.map(([name]) => name);
 }
 
 /**
@@ -355,19 +366,22 @@ export interface CategoryOptions {
 
 /**
  * Create or change a category, reusing an existing one whose name only differs in case.
- * New categories require a weight.
+ * New categories require a weight. Setting the weight or dropped count marks them as edited, so pulling keeps them.
+ * @returns The category's name
  */
-export function setCategory(course: string, name: string, options: CategoryOptions) {
+export function setCategory(course: string, name: string, options: CategoryOptions): string {
 	const { weight, mode, dropped, expected } = options;
 	name = Object.keys(data.courses[course]?.categories ?? {}).find(n => n.toLowerCase() == name.toLowerCase()) ?? name;
 	if (weight === undefined && !data.courses[course]?.categories[name]) throw new Error('A weight is required for a new category');
 
-	const category: CategoryOptions = {};
+	const category: CategoryOptions & { edited?: boolean } = {};
+	if (weight !== undefined || dropped !== undefined) category.edited = true;
 	if (weight !== undefined) category.weight = weight;
 	if (mode !== undefined) category.mode = mode;
 	if (dropped !== undefined) category.dropped = dropped;
 	if (expected !== undefined) category.expected = expected;
 	store.update({ courses: { [course]: { categories: { [name]: category } } } });
+	return name;
 }
 
 /** Remove a category, which must not have any grades. */
@@ -458,6 +472,15 @@ export function addGrade(course: string, category: string, name: string, points:
 	const id = nextManualId();
 	store.update({ courses: { [course]: { categories: { [category]: { scores: { [id]: { name, ...points } } } } } } });
 	return id;
+}
+
+/** Remove a grade that was added by hand */
+export function removeGrade(id: string) {
+	if (!id.startsWith('manual:')) throw new Error(`${id} was pulled from a platform, ignore it instead`);
+	const { course, category } = getItem(id);
+	edit(saved => {
+		delete saved.courses?.[course]?.categories?.[category]?.scores?.[id];
+	});
 }
 
 export interface ListOptions {

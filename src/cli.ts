@@ -6,6 +6,7 @@ import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import * as auto from './auto.js';
+import { doctor } from './doctor.js';
 import * as documents from './documents.js';
 import * as labs from './platforms/zybooks/labs.js';
 import { config, debugMode } from './config.js';
@@ -24,6 +25,8 @@ const cli = new Command('eedu').version($pkg.version).description($pkg.descripti
 export default cli;
 
 const dim = (text: string) => styleText('dim', text);
+
+const allTermsOption = new Option('-a, --all-terms', 'Include courses from all terms, not just the active ones').default(false);
 
 const cli_courses = cli.command('courses').description('Manage courses').option('--debug', 'Enable debug mode', false);
 
@@ -85,11 +88,13 @@ cli_courses
 		out('Grade', range(stats.grade, stats.err));
 		const totalWeight = stats.categories.reduce((sum, c) => sum + c.weight, 0);
 		if (Math.abs(totalWeight - 1) > 1e-9) io.warn(`Category weights add up to ${percent(totalWeight)}`);
+		const missing = grades.unweighted(course.id);
+		if (missing.length) io.warn(`Categories without a weight: ${missing.join(', ')}, use \`eedu grades doctor\` to fill them in`);
 
 		io.table(
 			[
 				{ name: 'Category', text: c => c.name },
-				{ name: 'Weight', text: c => percent(c.weight), padStart: true },
+				{ name: 'Weight', text: c => weightText(courseGrades.categories[c.name].weight), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
 				{ name: 'Grade', text: c => range(c.mean, c.err), padStart: true },
 				{ name: 'Unknown', text: c => (c.unknowns ? `${c.unknowns}/${c.total}` : ''), padStart: true, grow: 0 },
@@ -279,6 +284,7 @@ cli_auto
 const cli_grades = cli.command('grades').description('Manage grades');
 
 const percent = (x: number) => (x * 100).toFixed(1) + '%';
+const weightText = (weight?: number) => (weight === undefined ? styleText('yellow', 'unknown') : percent(weight));
 const points = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.possible}` : '');
 const status = (item: grades.Item) =>
 	styleText('yellow', [item.ignored && 'ignored', !item.possible && 'not counted', item.moved && 'moved'].filter(x => x).join(', '));
@@ -308,7 +314,7 @@ function gradeTable(rows: grades.GradeRow[], withContext: boolean = true) {
 cli_grades
 	.command('show')
 	.description('Show grades')
-	.option('-a, --all-terms', 'Show grades for all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.option('-l, --long', 'Show details for each category', false)
 	.option('-p, --predict', 'Predict category grades based on current score averages', false)
 	.option('-P, --predict-full-category', 'Predict scores for completely unknown categories using known ones (likely inaccurate)', false)
@@ -335,38 +341,92 @@ Percentage colors:
 		for (const course of courses) grades.show(course.name, course.grades, options);
 	});
 
+function changesTable(changes: grades.GradeChange[]) {
+	io.table(
+		[
+			{ name: 'ID', text: c => c.id },
+			{ name: 'Course', text: c => c.course.name },
+			{ name: 'Category', text: c => c.category },
+			{ name: 'Name', text: c => c.item.name },
+			{ name: 'Previous', text: c => styleText('dim', points(c.previous)), padStart: true },
+			{ name: 'Score', text: c => points(c.item), padStart: true },
+			{ name: 'Status', text: c => status(c.item), grow: 0 },
+		],
+		{ formatHead: text => styleText('bold', text) },
+		changes
+	);
+}
+
+const gradeSources = [canvas.grades];
+
+const showDefaults: grades.ShowOptions = { long: true, predict: false, predictFullCategory: false, errorAlignment: 9 };
+
 cli_grades
 	.command('pull')
 	.description('Fetch grades from discovered platforms')
-	.option('-a, --all-terms', 'Fetch grades for all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.action(async options => {
-		const changes = await grades.pull([canvas.grades], options.allTerms);
-		if (!changes.length) {
-			console.log('No new or updated grades.');
-			return;
+		const courses = matchCourses(undefined, options.allTerms);
+		const { changes } = await grades.pull(gradeSources, courses);
+
+		if (!changes.length) console.log('No new or updated grades.');
+		else {
+			changesTable(changes);
+			console.log(styleText('dim', 'Use `eedu grades ignore <id...>` to exclude grades that should not count.'));
 		}
 
-		io.table(
-			[
-				{ name: 'ID', text: c => c.id },
-				{ name: 'Course', text: c => c.course.name },
-				{ name: 'Category', text: c => c.category },
-				{ name: 'Name', text: c => c.item.name },
-				{ name: 'Previous', text: c => styleText('dim', points(c.previous)), padStart: true },
-				{ name: 'Score', text: c => points(c.item), padStart: true },
-				{ name: 'Status', text: c => status(c.item), grow: 0 },
-			],
-			{ formatHead: text => styleText('bold', text) },
-			changes
-		);
-		console.log(styleText('dim', 'Use `eedu grades ignore <id...>` to exclude grades that should not count.'));
+		for (const course of courses) {
+			const missing = grades.unweighted(course.id);
+			if (missing.length) io.warn(`${course.name} has categories without a weight: ${missing.join(', ')}`);
+		}
+		if (courses.some(course => grades.unweighted(course.id).length))
+			console.log(styleText('dim', 'Use `eedu grades doctor` to fill them in from the syllabus.'));
+	});
+
+cli_grades
+	.command('doctor')
+	.alias('fix')
+	.description("Have Claude fill in and correct courses' grade categories from the syllabus and LMS")
+	.argument('[courses...]', 'Course IDs or names, supports partial matches and is case insensitive (by default every course in progress)')
+	.addOption(allTermsOption)
+	.option('-i, --instructions <text>', 'Extra instructions for Claude')
+	.option('-m, --model <model>', 'Claude model to use, by default ' + config.llm)
+	.action(async (queries: string[], options) => {
+		const courses = queries.length
+			? [...new Set(queries.map(query => grades.findCourse(query)))]
+			: matchCourses(undefined, options.allTerms);
+		if (!courses.length) throw new Error('No courses to check');
+
+		const { changes, pulled } = await grades.pull(gradeSources, courses);
+		if (changes.length) changesTable(changes);
+
+		for (const course of courses) {
+			console.log(styleText('bold', `--- ${course.name} ---`));
+			try {
+				const result = await doctor(assignmentSources, course, {
+					...agentHandlers(course),
+					model: options.model,
+					instructions: options.instructions,
+					pulled: pulled.get(course.id) ?? [],
+					onStatus: text => io.log(dim(text)),
+				});
+				console.log(dim(`Estimated cost $${result.cost.toFixed(2)}`));
+			} catch (e) {
+				io.error(`Checking ${course.name} failed: ${io.errorText(e)}`);
+				continue;
+			}
+
+			const missing = grades.unweighted(course.id);
+			if (missing.length) io.warn('Still without a weight: ' + missing.join(', '));
+			if (grades.data.courses[course.id]) grades.show(course.name, grades.data.courses[course.id], showDefaults);
+		}
 	});
 
 cli_grades
 	.command('list')
 	.alias('ls')
 	.description('List grades')
-	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
 	.option('-C, --category <category>', 'Only categories whose name contains this (case insensitive)')
 	.action(options => {
@@ -424,7 +484,7 @@ cli_category
 	.command('list')
 	.alias('ls')
 	.description('List categories, optionally only those of courses matching --course')
-	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.action(async function cli_category_list() {
 		const categories = grades.listAllCategories(this.optsWithGlobals());
 		if (!categories.length) {
@@ -436,7 +496,7 @@ cli_category
 			[
 				{ name: 'Course', text: c => c.course.name },
 				{ name: 'Category', text: c => c.name },
-				{ name: 'Weight', text: c => percent(c.weight), padStart: true },
+				{ name: 'Weight', text: c => weightText(c.weight), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
 				{ name: 'Dropped', text: c => c.dropped || '', padStart: true },
 				{ name: 'Expected', text: c => c.expected ?? '', padStart: true },
@@ -461,7 +521,7 @@ cli_category
 		const range = (x: number, err: number) => percent(x) + (err ? ' ± ' + percent(err) : '');
 
 		console.log(styleText('bold', `--- ${name} (${course.name}) ---`));
-		out('Weight', percent(category.weight));
+		out('Weight', weightText(category.weight));
 		out('Mode', category.mode);
 		if (category.dropped) out('Dropped', category.dropped.toString());
 		if (category.expected !== undefined) out('Expected', category.expected.toString());
@@ -541,7 +601,7 @@ cli_assignments
 	.command('list')
 	.alias('ls')
 	.description('List assignments, by default those due up to 2 weeks from now')
-	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
 	.option('-C, --category <category>', 'Only categories whose name contains this (case insensitive)')
 	.option('--since <date>', 'Only assignments due at or after this date, or a relative time like -1w', parseDate)
@@ -748,7 +808,7 @@ cli_discussions
 	.command('list')
 	.alias('ls')
 	.description('List discussions')
-	.option('-a, --all-terms', 'Include courses from all terms, not just the active ones', false)
+	.addOption(allTermsOption)
 	.option('-c, --course <course>', 'Only courses whose ID or name contains this (case insensitive)')
 	.option('-s, --search <text>', 'Only discussions whose title contains this')
 	.option('-u, --unread', 'Only discussions with unread entries', false)

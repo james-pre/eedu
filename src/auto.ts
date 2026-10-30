@@ -13,6 +13,7 @@ import {
 	submit,
 	type Assignment,
 	type AssignmentSource,
+	type Attachment,
 	type Submission,
 } from './assignments.js';
 import { dataDir, school, type Course } from './data.js';
@@ -91,7 +92,10 @@ async function courseText(sources: AssignmentSource[], course: Course): Promise<
 	if (categories.length) {
 		lines.push('', '## Grade categories', '');
 		for (const [name, c] of categories)
-			lines.push(`- ${name}: ${(c.weight * 100).toFixed(1)}%` + (c.dropped ? `, ${c.dropped} dropped` : ''));
+			lines.push(
+				`- ${name}: ${c.weight === undefined ? 'weight unknown' : (c.weight * 100).toFixed(1) + '%'}`
+					+ (c.dropped ? `, ${c.dropped} dropped` : '')
+			);
 	}
 
 	lines.push('', '## Assignments', '');
@@ -242,6 +246,22 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 		return full;
 	};
 
+	/** Save files that aren't already in `target` */
+	const saveFiles = async (files: Attachment[], target: string): Promise<string[]> => {
+		mkdirSync(target, { recursive: true });
+		const lines = [];
+		for (const file of files) {
+			const out = join(target, slug(file.name));
+			if (existsSync(out)) lines.push('Already have ' + relative(dir, out));
+			else {
+				writeFileSync(out, await file.download());
+				lines.push('Saved ' + relative(dir, out));
+				status('Downloaded ' + relative(dir, out));
+			}
+		}
+		return lines;
+	};
+
 	return [
 		tool(
 			'get_course',
@@ -296,21 +316,25 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 				folder: z.string().optional().describe('Folder in the course directory to save into, by default the course directory'),
 			},
 			async ({ assignment: id, folder = '.' }) => {
-				const target = path(folder, 'write');
-				mkdirSync(target, { recursive: true });
-				const lines = [];
 				const a = await getAssignment(sources, id, course);
 				status('Downloading files for ' + a.name);
-				for (const file of await attachments(sources, a)) {
-					const out = join(target, slug(file.name));
-					if (existsSync(out)) lines.push('Already have ' + relative(dir, out));
-					else {
-						writeFileSync(out, await file.download());
-						lines.push('Saved ' + relative(dir, out));
-						status('Downloaded ' + relative(dir, out));
-					}
-				}
+				const lines = await saveFiles(await attachments(sources, a), path(folder, 'write'));
 				return textResult(lines.join('\n') || 'The assignment has no linked files');
+			}
+		),
+
+		tool(
+			'read_syllabus',
+			"Read the course's syllabus, description, and home page, and pages titled like a syllabus, and download syllabus files and the files they link into the syllabus folder of the course directory. Files that already exist are kept.",
+			{},
+			async () => {
+				if (course.canvas_id === undefined) return textResult('Syllabi can only be read from Canvas', true);
+				status('Reading the syllabus of ' + course.name);
+				const { pages, files } = await canvas.syllabus(course);
+				const lines = await saveFiles(files, path('syllabus', 'write'));
+				const text = pages.map(page => `# ${page.title}\n\n${htmlToText(page.html).trim()}`);
+				if (lines.length) text.push('# Files\n\n' + lines.join('\n'));
+				return textResult(text.join('\n\n') || 'No syllabus found in Canvas');
 			}
 		),
 
