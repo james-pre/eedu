@@ -214,11 +214,9 @@ function quizAssignment(assignment: Assignment): string {
 	return assignment.id.slice('canvas:'.length);
 }
 
-export interface ToolOptions {
+export interface ToolOptions extends quizzes.OpenOptions {
 	/** Show Claude the instructions of quizzes it opens */
 	quizInstructions?: boolean;
-	/** Ask the student for a quiz's access code, which Claude never sees */
-	accessCode?: quizzes.OpenOptions['accessCode'];
 }
 
 export function eeduTools(sources: AssignmentSource[], course: Course, events: ToolEvents = {}, options: ToolOptions = {}) {
@@ -229,7 +227,7 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 	const openQuiz = async (assignment: Assignment): Promise<quizzes.OpenQuiz> => {
 		const opened = openQuizzes.get(assignment.id);
 		if (opened) return opened;
-		const quiz = await quizzes.open(course, quizAssignment(assignment), { accessCode: options.accessCode });
+		const quiz = await quizzes.open(course, quizAssignment(assignment), options);
 		openQuizzes.set(assignment.id, quiz);
 		const remaining = timeLeft(quiz);
 		status(`Opened ${assignment.name}` + (remaining ? `, a timed quiz with ${remaining}` : ''));
@@ -580,16 +578,11 @@ export function eeduTools(sources: AssignmentSource[], course: Course, events: T
 /** Tools that act on the student's behalf, which always need their approval */
 const askTools = ['submit_assignment', 'post_discussion', 'submit_quiz'];
 
-export interface AssignmentOptions extends Omit<
-	AgentOptions,
-	'dir' | 'readable' | 'writable' | 'mcpServers' | 'allowedTools' | 'askTools'
-> {
+export interface AssignmentOptions
+	extends Omit<AgentOptions, 'dir' | 'readable' | 'writable' | 'mcpServers' | 'allowedTools' | 'askTools'>, ToolOptions {
 	/** Extra instructions from the student, or their feedback when continuing a session */
 	instructions?: string;
 	onStatus?: ToolEvents['onStatus'];
-	/** Show Claude the instructions of quizzes it opens, true by default */
-	quizInstructions?: boolean;
-	accessCode?: ToolOptions['accessCode'];
 }
 
 export interface AssignmentResult extends AgentResult {

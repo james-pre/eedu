@@ -186,7 +186,11 @@ const accessCodeAttempts = 3;
 export interface OpenOptions {
 	/** Ask the student for the quiz's access code, resolving to nothing to give up */
 	accessCode?(quiz: string, rejected: boolean): Promise<string | undefined>;
+	/** Called when a warning is encountered */
+	onWarning?(message: string): void;
 }
+
+const ldbMessage = 'This quiz requires Respondus LockDown Browser. Try running `eedu auto qemu` with the quiz open in a virtual machine.';
 
 /**
  * Start or resume the student's attempt at a New Quizzes assignment.
@@ -198,8 +202,7 @@ export async function open(course: Course, assignment: string, options: OpenOpti
 	const account = envValue(html, 'ACCOUNT_ID');
 	if (!launch?.params?.backend_url) throw new QuizError('This assignment is not a New Quizzes quiz');
 
-	if (String(launch.params.custom_canvas_assignment_ldb_enabled) == 'true')
-		throw new QuizError('This quiz requires Respondus LockDown Browser, so eedu will not take it');
+	if (String(launch.params.custom_canvas_assignment_ldb_enabled) == 'true') throw new QuizError(ldbMessage);
 
 	const { token } = await api<{ token: string }>(
 		'POST',
@@ -212,7 +215,7 @@ export async function open(course: Course, assignment: string, options: OpenOpti
 		signature: launch.signature,
 	});
 
-	if (native.rldb_launch) throw new QuizError('This quiz requires Respondus LockDown Browser, so eedu will not take it');
+	if (native.rldb_launch) throw new QuizError(ldbMessage);
 
 	const quiz = { lti: { base: launch.params.backend_url + '/api', token: native.access_token, domain } };
 	const { workflow, resourceId } = native.entry_path;
@@ -224,7 +227,8 @@ export async function open(course: Course, assignment: string, options: OpenOpti
 	const shown = { api: { host: participant.host, token: participant.token } };
 	const preview = await quizApi<QuizSession>(shown, 'GET', `/quiz_sessions/${participant.quiz_api_quiz_session_id}`);
 
-	if (preview.quiz.filter_ip_address && !preview.ip_is_allowed) throw new QuizError("This quiz can't be taken from this network");
+	if (preview.quiz.filter_ip_address && !preview.ip_is_allowed)
+		options.onWarning?.("This quiz has a network restriction. It might only be available on the school's network or VPN");
 
 	for (let tries = 0; preview.quiz.require_student_access_code && !preview.accepted_student_access_code; tries++) {
 		if (tries == accessCodeAttempts) throw new QuizError('The access code was rejected ' + tries + ' times');
