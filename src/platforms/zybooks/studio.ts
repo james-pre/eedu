@@ -1,5 +1,6 @@
 import $pkg from '../../../package.json' with { type: 'json' };
-import { api, data, type Lab } from '../zybooks.js';
+import { api, data } from './api.js';
+import type { Lab } from './types.js';
 
 /** The editor zyBooks runs programming labs in, which holds each student's files and grades them */
 const base = 'https://cc-api.zybooks.com';
@@ -232,4 +233,13 @@ export async function score(workspace: Workspace, timeout: number = 300_000): Pr
 /** Put a scored run in the gradebook, which is the last step of submitting */
 export async function recordSubmission(zybook_code: string, resourceId: number): Promise<void> {
 	await api('PUT', `zybook/${zybook_code}/zystudio/${resourceId}/record_submission`);
+}
+
+/** The student's submissions to a programming lab, newest last */
+export async function labSubmissions(zybook_id: number, resourceId: number): Promise<{ date_submitted: string; score: number }[]> {
+	const { submissions } = await api<{ submissions: { date_submitted: string; score: number }[] }>(
+		'GET',
+		`zybook/${zybook_id}/zystudio/${resourceId}/submissions`
+	);
+	return submissions.sort((a, b) => a.date_submitted.localeCompare(b.date_submitted));
 }

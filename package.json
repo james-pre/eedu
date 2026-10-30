@@ -15,6 +15,10 @@
 	"bin": {
 		"eedu": "./dist/main.js"
 	},
+	"exports": {
+		".": "./dist/index.js",
+		"./*": "./dist/*.js"
+	},
 	"files": [
 		"dist",
 		"plugin",

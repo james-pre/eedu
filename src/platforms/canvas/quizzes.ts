@@ -1,6 +1,6 @@
 import $pkg from '../../../package.json' with { type: 'json' };
 import type { Course } from '../../data.js';
-import { api, data } from '../canvas.js';
+import { api, data } from './api.js';
 import { putRecords, type KinesisConfiguration } from './kinesis.js';
 
 /** Whether an external tool URL is New Quizzes */

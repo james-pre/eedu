@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { TestCase } from '../zybooks.js';
+import type { ContentResource, TestCase } from './types.js';
 
 const exec = promisify(execFile);
 
@@ -125,4 +125,9 @@ export async function runTests(dir: string, file: string, tests: TestCase[], tim
 	}
 
 	return results;
+}
+
+/** A programming lab's test cases, in the order they are shown */
+export function labTests(resource: ContentResource): TestCase[] {
+	return [...(resource.payload.testCases ?? [])].sort((a, b) => (a.sortWeight ?? 0) - (b.sortWeight ?? 0));
 }

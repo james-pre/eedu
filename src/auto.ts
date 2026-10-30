@@ -20,7 +20,7 @@ import { dataDir, school, type Course } from './data.js';
 import * as documents from './documents.js';
 import { courseGrades } from './grades.js';
 import { pluginDir, prompt, runAgent, within, type AgentOptions, type AgentResult } from './llm.js';
-import * as canvas from './platforms/canvas.js';
+import * as canvas from './platforms/canvas/index.js';
 import { parseAnswer, quizText, timeLeft, unanswered } from './platforms/canvas/answers.js';
 import * as quizzes from './platforms/canvas/quizzes.js';
 import type * as canvasTypes from './platforms/canvas/types.js';

@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as z from 'zod';
 import $pkg from '../../../package.json' with { type: 'json' };
-import { firstDifference, languageOf, runTests } from './code.js';
+import { firstDifference, labTests, languageOf, runTests } from './code.js';
 import { dataDir } from '../../data.js';
 import { prompt, runAgent, within, type AgentOptions, type AgentResult } from '../../llm.js';
-import * as zybooks from '../zybooks.js';
+import * as zybooks from './index.js';
 import * as studio from './studio.js';
 import { htmlToText } from '../../text.js';
 import { Screen } from '../../vnc.js';
@@ -378,11 +378,11 @@ export async function codeLab(lab: zybooks.Lab, options: LabOptions): Promise<La
 	const { zybook_code, zybook_id, resource } = lab;
 	const status = (text: string) => options.onStatus?.(text);
 
-	const tests = zybooks.labTests(resource);
+	const tests = labTests(resource);
 	const possible = tests.reduce((sum, test) => sum + test.points, 0);
 	if (!tests.length) throw new Error(lab.name + ' has no test cases');
 
-	const submissions = await zybooks.labSubmissions(zybook_id, resource.id).catch(() => []);
+	const submissions = await studio.labSubmissions(zybook_id, resource.id).catch(() => []);
 	const best = submissions.reduce((top, s) => Math.max(top, s.score), 0);
 
 	status('Opening the zyStudio workspace for ' + lab.name);
