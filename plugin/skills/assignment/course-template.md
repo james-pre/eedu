@@ -7,7 +7,7 @@
 - Submission format:
 - Formatting rules:
 - Citation style:
-- AI policy:
+- AI policy (the student's to fill in):
 - AI disclosure (the student's decision):
 
 ## Assignments

@@ -28,8 +28,8 @@ Never invent a weight, count, or score. When the sources disagree or say nothing
 7. **Grades outside the LMS.** Add graded work the LMS will never have (paper exams, attendance kept elsewhere) with `add_grade`, using `null` for scores not known yet. Don't add what the LMS will post later; that's what `expected` is for.
 8. **Grades that don't count.** Ignore practice, ungraded, or duplicate items that the LMS includes but the syllabus doesn't count. Extra credit stays counted.
 9. Set the passing grade from the grading scale with `set_passing` when it's clear, such as the lowest D or the minimum the syllabus names.
-10. Record the grading policy in the course notes, creating them if needed, so later work can use it.
+10. Record the grading policy in the course notes, creating them if needed, so later work can use it. Leave the notes' AI policy alone.
 
 ## Summary
 
-Reply briefly: what you changed and why, and what's still unknown or uncertain, so the student can check it with `eedu grades show -l`.
+Reply briefly: what you changed and why, and what's still unknown or uncertain.
