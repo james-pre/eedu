@@ -5,6 +5,7 @@ import {
 	type McpServerConfig,
 	type Options,
 	type SDKResultMessage,
+	type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -111,6 +112,11 @@ export interface AgentOptions {
 	answer(questions: Question[]): Promise<Record<string, string>>;
 	/** Whether to allow a tool call that eedu does not allow on its own, or why the user declined it */
 	approve(tool: string, input: Record<string, unknown>): Promise<boolean | { reason: string }>;
+	/**
+	 * The student's next message, asked for each time Claude finishes, which ends the session when there is none.
+	 * `signal` aborts when Claude starts working again because another session messaged it.
+	 */
+	followUp?(signal: AbortSignal): Promise<string | undefined>;
 	onText?(text: string): void;
 	onTool?(name: string, input: Record<string, unknown>): void;
 }
@@ -122,7 +128,20 @@ export interface AgentResult {
 	cost: number;
 }
 
-const agentTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'AskUserQuestion', 'Skill', 'WebSearch', 'WebFetch'];
+const agentTools = [
+	'Read',
+	'Glob',
+	'Grep',
+	'Write',
+	'Edit',
+	'Bash',
+	'AskUserQuestion',
+	'Skill',
+	'WebSearch',
+	'WebFetch',
+	'ListAgents',
+	'SendMessage',
+];
 
 const fileAccess: Record<string, 'read' | 'write'> = { Read: 'read', Glob: 'read', Grep: 'read', Write: 'write', Edit: 'write' };
 
@@ -197,7 +216,7 @@ function toolPaths(tool: string, input: Record<string, unknown>, dir: string): s
 export async function runAgent(text: string, options: AgentOptions): Promise<AgentResult> {
 	const { dir, readable = [], writable = [] } = options;
 	const askTools = ['Bash', ...(options.askTools ?? [])];
-	const allowedTools = ['WebSearch', ...(options.yolo ? ['WebFetch'] : []), ...(options.allowedTools ?? [])];
+	const allowedTools = ['WebSearch', 'ListAgents', 'SendMessage', ...(options.yolo ? ['WebFetch'] : []), ...(options.allowedTools ?? [])];
 
 	const decide = (permissionDecision: HookPermissionDecision) => ({
 		hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision },
@@ -239,10 +258,55 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 		return result;
 	};
 
+	const userMessage = (content: string): SDKUserMessage => ({
+		type: 'user',
+		message: { role: 'user', content },
+		parent_tool_use_id: null,
+	});
+
+	/** The student's next message, or nothing to end the session */
+	let reply = Promise.withResolvers<string | undefined>();
+
+	async function* input(): AsyncGenerator<SDKUserMessage> {
+		yield userMessage(text);
+		for (;;) {
+			const content = await reply.promise;
+			if (content === undefined) return;
+			reply = Promise.withResolvers();
+			yield userMessage(content);
+		}
+	}
+
+	/** Aborts the follow-up prompt while it is open */
+	let waiting: AbortController | undefined;
+	let failure: unknown;
+
+	const busy = () => {
+		waiting?.abort();
+		waiting = undefined;
+	};
+
+	const askFollowUp = () => {
+		if (waiting) return;
+		if (!options.followUp) return reply.resolve(undefined);
+		const controller = (waiting = new AbortController());
+		options.followUp(controller.signal).then(
+			content => {
+				if (waiting == controller) waiting = undefined;
+				if (content !== undefined || !controller.signal.aborted) reply.resolve(content);
+			},
+			error => {
+				failure = error;
+				reply.resolve(undefined);
+			}
+		);
+	};
+
 	const messages = query({
-		prompt: text,
+		prompt: input(),
 		options: {
 			...baseOptions(options.model),
+			settings: { crossSessionInbound: 'accept' },
 			cwd: dir,
 			additionalDirectories: readable,
 			resume: options.resume,
@@ -265,16 +329,31 @@ export async function runAgent(text: string, options: AgentOptions): Promise<Age
 		},
 	});
 
-	for await (const message of messages) {
-		if (message.type == 'assistant') {
-			for (const block of message.message.content) {
-				if (block.type == 'text') options.onText?.(block.text);
-				else if (block.type == 'tool_use') options.onTool?.(block.name, block.input as Record<string, unknown>);
+	let result: AgentResult | undefined;
+
+	try {
+		for await (const message of messages) {
+			if (message.type == 'system' && message.subtype == 'init') busy();
+
+			if (message.type == 'assistant') {
+				busy();
+				for (const block of message.message.content) {
+					if (block.type == 'text') options.onText?.(block.text);
+					else if (block.type == 'tool_use') options.onTool?.(block.name, block.input as Record<string, unknown>);
+				}
+			}
+
+			if (message.type == 'result') {
+				result = { text: resultText(message), sessionId: message.session_id, cost: message.total_cost_usd };
+				askFollowUp();
 			}
 		}
-
-		if (message.type == 'result') return { text: resultText(message), sessionId: message.session_id, cost: message.total_cost_usd };
+	} finally {
+		busy();
+		reply.resolve(undefined);
 	}
 
-	throw new Error('Claude did not respond');
+	if (failure) throw failure;
+	if (!result) throw new Error('Claude did not respond');
+	return result;
 }

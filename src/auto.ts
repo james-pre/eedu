@@ -595,11 +595,13 @@ export interface AssignmentResult extends AgentResult {
 /**
  * Have Claude work on an assignment in its course's directory, using and updating the course notes and student profile.
  * Claude can only write in the course's directory and to the student profile, and the student approves each submission and post.
+ * The session ends once something is submitted, instead of asking for a follow-up.
  */
 export async function assignment(sources: AssignmentSource[], a: Assignment, options: AssignmentOptions): Promise<AssignmentResult> {
 	const dir = courseDir(a.course);
 	mkdirSync(dir, { recursive: true });
 	let submitted = false;
+	const { followUp } = options;
 	const tools = eeduTools(
 		sources,
 		a.course,
@@ -626,6 +628,7 @@ export async function assignment(sources: AssignmentSource[], a: Assignment, opt
 		allowedTools: tools.filter(t => !askTools.includes(t.name)).map(t => 'mcp__eedu__' + t.name),
 		askTools: askTools.map(name => 'mcp__eedu__' + name),
 		validate: (tool, input) => unfinished(a.course, tool.replace(/^mcp__eedu__/, ''), input),
+		followUp: followUp && (async signal => (submitted ? undefined : await followUp(signal))),
 	});
 
 	return { ...result, dir, submitted };

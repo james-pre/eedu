@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
 import { basename } from 'node:path';
+import { clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
@@ -931,6 +932,42 @@ async function answerQuestions(questions: llm.Question[]): Promise<Record<string
 	return answers;
 }
 
+/** What was typed into a prompt before it was cancelled, which the next prompt starts with */
+let draft = '';
+
+/**
+ * Ask a question until `signal` aborts, which clears the prompt and keeps what was typed for the next one.
+ * @returns The answer, or nothing when aborted
+ */
+async function askUnless(question: string, signal: AbortSignal): Promise<string | undefined> {
+	if (signal.aborted) return;
+	using rl = io.getReadline();
+	const answer = io.ask(question);
+	if (draft) rl.write(draft);
+	draft = '';
+
+	const cancel = () => {
+		draft = rl.line;
+		if (process.stdout.isTTY) {
+			moveCursor(process.stdout, 0, -rl.getCursorPos().rows);
+			cursorTo(process.stdout, 0);
+			clearScreenDown(process.stdout);
+		}
+		io._setActivePrompt(null);
+		rl.close();
+	};
+	signal.addEventListener('abort', cancel, { once: true });
+
+	try {
+		return await answer;
+	} catch (error) {
+		if (signal.aborted) return;
+		throw error;
+	} finally {
+		signal.removeEventListener('abort', cancel);
+	}
+}
+
 function toolSummary(name: string, input: Record<string, unknown>): string {
 	const detail = ['file_path', 'path', 'pattern', 'query', 'url', 'id', 'assignment', 'skill', 'vm', 'text']
 		.map(key => input[key])
@@ -1072,7 +1109,7 @@ cli_auto
 				)
 			);
 
-		const handlers: Omit<auto.AssignmentOptions, 'instructions' | 'resume'> = {
+		const result = await auto.assignment(assignmentSources, a, {
 			...agentHandlers(a.course),
 			model: options.model,
 			acceptEdits: options.acceptEdits || options.YOLO,
@@ -1082,21 +1119,12 @@ cli_auto
 				await io.ask(`${rejected ? 'That access code was rejected. ' : ''}Access code for ${quiz} (leave empty to skip): `),
 			onStatus: text => io.log(dim(text)),
 			onWarning: io.warn,
-		};
+			instructions: options.instructions,
+			followUp: async signal => (await askUnless('Message for Claude (leave empty to finish): ', signal))?.trim() || undefined,
+		});
 
-		let result = await auto.assignment(assignmentSources, a, { ...handlers, instructions: options.instructions });
-		let submitted = result.submitted;
-
-		for (;;) {
-			console.log(styleText('dim', `Files are in ${result.dir} (estimated cost $${result.cost.toFixed(2)})`));
-			if (submitted) break;
-			const feedback = (await io.ask('Changes for Claude (leave empty to finish): ')).trim();
-			if (!feedback) break;
-			result = await auto.assignment(assignmentSources, a, { ...handlers, resume: result.sessionId, instructions: feedback });
-			submitted ||= result.submitted;
-		}
-
-		if (submitted) return;
+		console.log(styleText('dim', `Files are in ${result.dir} (estimated cost $${result.cost.toFixed(2)})`));
+		if (result.submitted) return;
 
 		if (a.types.includes('quiz')) {
 			console.log(
