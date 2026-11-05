@@ -21,7 +21,7 @@ function gradesText(course: Course, pulled: grades.PulledCategory[]): string {
 	const { passing, categories } = grades.courseGrades(course.id);
 	const lines = [`# Grades in ${course.name}`, '', 'Passing grade: ' + (passing === null ? 'none' : percent(passing))];
 
-	const weights = Object.values(categories).map(category => category.weight);
+	const weights = Object.values(categories).map(category => (category ? category.weight : 0));
 	const total = weights.reduce<number>((sum, weight) => sum + (weight ?? 0), 0);
 	lines.push(
 		`Weights add up to ${percent(total)}`
@@ -29,6 +29,11 @@ function gradesText(course: Course, pulled: grades.PulledCategory[]): string {
 	);
 
 	for (const [name, category] of Object.entries(categories)) {
+		if (!category) {
+			lines.push('', `## ${name}`, 'This category has been deleted');
+			continue;
+		}
+
 		const details = [
 			'weight ' + (category.weight === undefined ? 'unknown' : percent(category.weight)),
 			category.mode,
@@ -53,6 +58,7 @@ function gradesText(course: Course, pulled: grades.PulledCategory[]): string {
 			category.weight === undefined ? "doesn't give a weight" : 'weight ' + percent(category.weight),
 			category.dropped && `${category.dropped} dropped`,
 			`${category.scores.length} assignments`,
+			categories[category.name] === null && 'removed in eedu',
 		];
 		lines.push(`- ${category.name}: ${details.filter(x => x).join(', ')}`);
 	}
@@ -117,7 +123,7 @@ export function gradeTools(course: Course, pulled: grades.PulledCategory[], even
 
 		tool(
 			'remove_category',
-			'Remove a category that has no grades; move or remove its grades first',
+			"Remove a category that has no grades; move or remove its grades first. Pulling won't bring it back unless the LMS puts grades in it.",
 			{ name: z.string(), reason },
 			async ({ name, reason }) =>
 				attempt(() => {

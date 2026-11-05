@@ -95,7 +95,7 @@ cli_courses
 		io.table(
 			[
 				{ name: 'Category', text: c => c.name },
-				{ name: 'Weight', text: c => weightText(courseGrades.categories[c.name].weight), padStart: true },
+				{ name: 'Weight', text: c => weightText(courseGrades.categories[c.name]), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
 				{ name: 'Grade', text: c => range(c.mean, c.err), padStart: true },
 				{ name: 'Unknown', text: c => (c.unknowns ? `${c.unknowns}/${c.total}` : ''), padStart: true, grow: 0 },
@@ -285,7 +285,8 @@ cli_auto
 const cli_grades = cli.command('grades').description('Manage grades');
 
 const percent = (x: number) => (x * 100).toFixed(1) + '%';
-const weightText = (weight?: number) => (weight === undefined ? styleText('yellow', 'unknown') : percent(weight));
+const weightText = (category?: { weight?: number } | null) =>
+	category?.weight === undefined ? styleText('yellow', 'unknown') : percent(category.weight);
 const points = (item?: grades.Item) => (item ? `${item.score ?? '?'}/${item.possible}` : '');
 const status = (item: grades.Item) =>
 	styleText('yellow', [item.ignored && 'ignored', !item.possible && 'not counted', item.moved && 'moved'].filter(x => x).join(', '));
@@ -497,7 +498,7 @@ cli_category
 			[
 				{ name: 'Course', text: c => c.course.name },
 				{ name: 'Category', text: c => c.name },
-				{ name: 'Weight', text: c => weightText(c.weight), padStart: true },
+				{ name: 'Weight', text: c => weightText(c), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
 				{ name: 'Dropped', text: c => c.dropped || '', padStart: true },
 				{ name: 'Expected', text: c => c.expected ?? '', padStart: true },
@@ -515,14 +516,15 @@ cli_category
 	.action(async function cli_category_info(name) {
 		const course = await categoryCourse(this);
 		name = grades.findCategory(course, name);
-		const category = grades.data.courses[course.id].categories[name];
+		const category = grades.data.courses[course.id].categories[name]!;
+
 		const stats = grades.categoryStats(name, category);
 
 		const out = (key: string, value: string) => console.log(styleText('whiteBright', key + ':'), value);
 		const range = (x: number, err: number) => percent(x) + (err ? ' ± ' + percent(err) : '');
 
 		console.log(styleText('bold', `--- ${name} (${course.name}) ---`));
-		out('Weight', weightText(category.weight));
+		out('Weight', weightText(category));
 		out('Mode', category.mode);
 		if (category.dropped) out('Dropped', category.dropped.toString());
 		if (category.expected !== undefined) out('Expected', category.expected.toString());
@@ -556,7 +558,7 @@ cli_category
 cli_category
 	.command('remove')
 	.alias('rm')
-	.description('Remove a category without any grades')
+	.description("Remove a category without any grades, which pulling won't bring back unless it gets grades")
 	.argument('<name>', 'Name of the category, supports partial matches and is case insensitive')
 	.action(async function cli_category_remove(name) {
 		const course = await categoryCourse(this);

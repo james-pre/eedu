@@ -21,7 +21,7 @@ Never invent a weight, count, or score. When the sources disagree or say nothing
 
 1. Read the course notes, then `get_grades` and `get_course`.
 2. Find the grading policy in the syllabus. If there's no syllabus in the LMS, look in the course directory, then ask the student.
-3. **Map syllabus categories to eedu's.** When the LMS groups match, keep their names. When they don't (everything in one "Assignments" group, or a syllabus category split across groups), create the syllabus' categories with `set_category`, move the grades into them with `move_grades`, and remove empty LMS categories that don't count.
+3. **Map syllabus categories to eedu's.** When the LMS groups match, keep their names. When they don't (everything in one "Assignments" group, or a syllabus category split across groups), create the syllabus' categories with `set_category`, move the grades into them with `move_grades`, and remove empty LMS categories that don't count. Removed categories stay removed when pulling until the LMS puts grades in them.
 4. **Weights.** Fill in every unknown weight. Correct an LMS weight only when the syllabus clearly says otherwise. When the course grades by total points rather than weighted categories, give each category its share of the total points. Weights should add up to 100%; note extra credit that makes them add up to more.
 5. **Drops and modes.** Set dropped counts from the syllabus ("lowest two quizzes dropped"). Use `average` when every assignment in a category counts equally regardless of points, and `points` otherwise.
 6. **Expected counts.** When the syllabus says how many assignments a category has and the LMS hasn't posted them all, set `expected` to the total, including the ones posted.

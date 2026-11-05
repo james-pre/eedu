@@ -18,7 +18,7 @@ import {
 } from './assignments.js';
 import { dataDir, school, type Course } from './data.js';
 import * as documents from './documents.js';
-import { courseGrades } from './grades.js';
+import { courseGrades, type Category } from './grades.js';
 import { pluginDir, prompt, runAgent, within, type AgentOptions, type AgentResult } from './llm.js';
 import * as canvas from './platforms/canvas/index.js';
 import { parseAnswer, quizText, timeLeft, unanswered } from './platforms/canvas/answers.js';
@@ -88,7 +88,7 @@ async function courseText(sources: AssignmentSource[], course: Course): Promise<
 		'Directory: ' + dir,
 	];
 
-	const categories = Object.entries(courseGrades(course.id).categories);
+	const categories = Object.entries(courseGrades(course.id).categories).filter((ent): ent is [string, Category] => !!ent[1]);
 	if (categories.length) {
 		lines.push('', '## Grade categories', '');
 		for (const [name, c] of categories)
