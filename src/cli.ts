@@ -144,6 +144,25 @@ cli_discover.command('zybooks').description('Discover books from ZyBooks').actio
 
 cli_discover.command('qemu').description('Discover the VM, its dimensions, and paths used for screen automation').action(qemu.discover);
 
+const cli_qemu = cli.command('qemu').alias('vm').description('Control the VM');
+
+cli_qemu
+	.command('login')
+	.description("Sign the VM's browser into Canvas with the host's access token, without going through SSO")
+	.argument('[path]', 'Canvas page to open once signed in', '/')
+	.option('--no-focus', 'Type into whatever has focus instead of pressing Ctrl+L to select the address bar')
+	.action(async (path, opts) => {
+		qemu.assertRunning();
+		if (opts.focus) {
+			qemu.press('ctrl', 'l');
+			await new Promise(resolve => setTimeout(resolve, 300));
+		}
+		// The URL expires within seconds, so it is created after the address bar is ready.
+		const url = await canvas.sessionURL(path);
+		await qemu.type(url + '\n');
+		console.log('Typed a one-time Canvas sign-in URL into the VM');
+	});
+
 const cli_auto = cli
 	.command('autocomplete')
 	.alias('auto')

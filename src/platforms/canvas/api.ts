@@ -71,6 +71,17 @@ export async function api<T = any>(method: string, endpoint: string, body?: any,
 	return json;
 }
 
+/**
+ * Create a short-lived, one-time URL that signs a browser into Canvas as the token's user, bypassing SSO.
+ * @param returnTo Page to land on, relative to the Canvas origin
+ */
+export async function sessionURL(returnTo: string = '/'): Promise<string> {
+	if (!data.origin) throw new Error('Canvas is not set up, run `eedu discover canvas`');
+	const target = new URL(returnTo, data.origin).href;
+	const { session_url } = await api<{ session_url: string }>('GET', 'login/session_token?return_to=' + encodeURIComponent(target));
+	return session_url;
+}
+
 /** GET every page of a list endpoint */
 export async function apiAll<T>(endpoint: string): Promise<T[]> {
 	const results: T[] = [];
