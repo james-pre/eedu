@@ -1,7 +1,7 @@
 import { Manager } from '@james-pre/config';
 import * as io from 'ioium/node';
 import sharp from 'sharp';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdtempDisposableSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { cpus, machine, tmpdir, totalmem } from 'node:os';
@@ -45,14 +45,13 @@ export const QemuData = z.object({
 		.prefault({}),
 	/** Milliseconds to let the guest repaint after scrolling */
 	renderDelay: z.int().nonnegative().default(1000),
-	typing: z
-		.object({
-			/** Characters sent per QMP call, kept small so the guest's PS/2 buffer does not overflow */
-			chunk: z.int().positive().default(16),
-			/** Milliseconds between chunks */
-			delay: z.int().nonnegative().default(50),
-		})
-		.prefault({}),
+	/**
+	 * Milliseconds each key is held while typing.
+	 * QEMU paces queued keystrokes by this, so the guest's 16-byte PS/2 queue does not overflow.
+	 */
+	keyHold: z.int().positive().default(25),
+	/** Address the guest reaches the host's loopback interface at, which is 10.0.2.2 with QEMU's user networking */
+	hostAddress: z.string().default('10.0.2.2'),
 });
 
 export interface QemuData extends z.infer<typeof QemuData> {}
@@ -168,19 +167,20 @@ export async function scroll(count: number = data.scroll.count): Promise<void> {
 	}
 }
 
-/** QEMU key codes for printable characters on a US layout, and whether each needs shift */
-const usLayout = new Map<string, [qcode: string, shift: boolean]>([
-	[' ', ['spc', false]],
-	['\n', ['ret', false]],
-	['\t', ['tab', false]],
+/** Linux key names for each character on a US layout */
+const usLayout = new Map<string, string[]>([
+	[' ', ['KEY_SPACE']],
+	['\n', ['KEY_ENTER']],
+	['\t', ['KEY_TAB']],
 ]);
 
 for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
-	usLayout.set(letter, [letter, false]);
-	usLayout.set(letter.toUpperCase(), [letter, true]);
+	const key = 'KEY_' + letter.toUpperCase();
+	usLayout.set(letter, [key]);
+	usLayout.set(letter.toUpperCase(), ['KEY_LEFTSHIFT', key]);
 }
 
-for (const [qcode, plain, shifted] of [
+for (const [key, plain, shifted] of [
 	['1', '1', '!'],
 	['2', '2', '@'],
 	['3', '3', '#'],
@@ -191,36 +191,45 @@ for (const [qcode, plain, shifted] of [
 	['8', '8', '*'],
 	['9', '9', '('],
 	['0', '0', ')'],
-	['grave_accent', '`', '~'],
-	['minus', '-', '_'],
-	['equal', '=', '+'],
-	['bracket_left', '[', '{'],
-	['bracket_right', ']', '}'],
-	['backslash', '\\', '|'],
-	['semicolon', ';', ':'],
-	['apostrophe', "'", '"'],
-	['comma', ',', '<'],
-	['dot', '.', '>'],
-	['slash', '/', '?'],
+	['GRAVE', '`', '~'],
+	['MINUS', '-', '_'],
+	['EQUAL', '=', '+'],
+	['LEFTBRACE', '[', '{'],
+	['RIGHTBRACE', ']', '}'],
+	['BACKSLASH', '\\', '|'],
+	['SEMICOLON', ';', ':'],
+	['APOSTROPHE', "'", '"'],
+	['COMMA', ',', '<'],
+	['DOT', '.', '>'],
+	['SLASH', '/', '?'],
 ]) {
-	usLayout.set(plain, [qcode, false]);
-	usLayout.set(shifted, [qcode, true]);
+	usLayout.set(plain, ['KEY_' + key]);
+	usLayout.set(shifted, ['KEY_LEFTSHIFT', 'KEY_' + key]);
 }
 
-function keyEvent(qcode: string, down: boolean) {
-	return { type: 'key', data: { down, key: { type: 'qcode', data: qcode } } };
+/**
+ * Send key combinations through one virsh process.
+ * QEMU queues them behind each other, each held for {@link QemuData.keyHold}, so this returns before the guest has received them all.
+ */
+function sendKeys(text: string, combinations: string[][]): void {
+	const name = '"' + domain().replace(/["\\]/g, '\\$&') + '"';
+	const commands = combinations.map(keys => `send-key ${name} --codeset linux --holdtime ${data.keyHold} ${keys.join(' ')}`);
+
+	io.debug(text);
+
+	const result = spawnSync('virsh', ['-q', '-c', data.url], {
+		input: commands.join('\n') + '\n',
+		encoding: 'utf-8',
+		timeout: timeouts.virsh,
+	});
+	const error = result.error ?? result.stderr.match(/^error: .*/m)?.[0];
+	if (error) throw new Error(`${text} failed: ${error}`);
 }
 
-function sendEvents(text: string, events: object[]): void {
-	virsh(text, 'qemu-monitor-command', domain(), JSON.stringify({ execute: 'input-send-event', arguments: { events } }));
-}
-
-/** Press a key combination, e.g. `press('ctrl', 'l')` */
-export function press(...qcodes: string[]): void {
-	sendEvents(`Pressing ${qcodes.join('+')}`, [
-		...qcodes.map(qcode => keyEvent(qcode, true)),
-		...qcodes.toReversed().map(qcode => keyEvent(qcode, false)),
-	]);
+/** Press a key combination, e.g. `press('KEY_LEFTCTRL', 'KEY_L')` */
+export async function press(...keys: string[]): Promise<void> {
+	sendKeys(`Pressing ${keys.join('+')}`, [keys]);
+	await sleep(data.keyHold);
 }
 
 /** Type text into whatever has focus in the guest, assuming the guest uses a US keyboard layout. */
@@ -229,18 +238,11 @@ export async function type(text: string): Promise<void> {
 	const unsupported = [...new Set(characters.filter(character => !usLayout.has(character)))];
 	if (unsupported.length) throw new Error('Can not type ' + unsupported.map(character => JSON.stringify(character)).join(', '));
 
-	const { chunk, delay } = data.typing;
-
-	for (let i = 0; i < characters.length; i += chunk) {
-		const events = characters.slice(i, i + chunk).flatMap(character => {
-			const [qcode, shift] = usLayout.get(character)!;
-			const stroke = [keyEvent(qcode, true), keyEvent(qcode, false)];
-			return shift ? [keyEvent('shift', true), ...stroke, keyEvent('shift', false)] : stroke;
-		});
-
-		sendEvents(`Typing (${Math.min(i + chunk, characters.length)}/${characters.length})`, events);
-		await sleep(delay);
-	}
+	sendKeys(
+		`Typing ${characters.length} characters`,
+		characters.map(character => usLayout.get(character)!)
+	);
+	await sleep(characters.length * data.keyHold);
 }
 
 export async function discover() {

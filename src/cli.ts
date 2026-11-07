@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
 import { basename } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
@@ -150,17 +151,30 @@ cli_qemu
 	.command('login')
 	.description("Sign the VM's browser into Canvas with the host's access token, without going through SSO")
 	.argument('[path]', 'Canvas page to open once signed in', '/')
+	.option('--no-type', 'Only print the address to open in the VM, instead of typing it')
 	.option('--no-focus', 'Type into whatever has focus instead of pressing Ctrl+L to select the address bar')
+	.option('-t, --timeout <seconds>', 'Give up if the VM has not opened the address by then', v => parseInt(v), 120)
 	.action(async (path, opts) => {
 		qemu.assertRunning();
-		if (opts.focus) {
-			qemu.press('ctrl', 'l');
-			await new Promise(resolve => setTimeout(resolve, 300));
+
+		using server = await canvas.serveSession(path);
+		const url = `http://${qemu.data.hostAddress}:${server.port}`;
+
+		if (opts.type) {
+			if (opts.focus) {
+				await qemu.press('KEY_LEFTCTRL', 'KEY_L');
+				await sleep(300);
+			}
+			await qemu.type(url + '\n');
 		}
-		// The URL expires within seconds, so it is created after the address bar is ready.
-		const url = await canvas.sessionURL(path);
-		await qemu.type(url + '\n');
-		console.log('Typed a one-time Canvas sign-in URL into the VM');
+
+		console.log(`Waiting for the VM to open ${url}`);
+		const result = await Promise.race([server.served, sleep(opts.timeout * 1000, 'timeout', { ref: false })]);
+		if (result == 'timeout') throw new Error(`The VM did not open ${url} within ${opts.timeout} seconds`);
+
+		// The first request may have been the browser prefetching, so the real navigation gets a moment to arrive.
+		await sleep(3000);
+		console.log('Redirected the VM to a new Canvas session');
 	});
 
 const cli_auto = cli
