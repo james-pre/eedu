@@ -155,26 +155,7 @@ cli_qemu
 	.option('--no-focus', 'Type into whatever has focus instead of pressing Ctrl+L to select the address bar')
 	.option('-t, --timeout <seconds>', 'Give up if the VM has not opened the address by then', v => parseInt(v), 120)
 	.action(async (path, opts) => {
-		qemu.assertRunning();
-
-		using server = await canvas.serveSession(path);
-		const url = `http://${qemu.data.hostAddress}:${server.port}`;
-
-		if (opts.type) {
-			if (opts.focus) {
-				await qemu.press('KEY_LEFTCTRL', 'KEY_L');
-				await sleep(300);
-			}
-			await qemu.type(url + '\n');
-		}
-
-		console.log(`Waiting for the VM to open ${url}`);
-		const result = await Promise.race([server.served, sleep(opts.timeout * 1000, 'timeout', { ref: false })]);
-		if (result == 'timeout') throw new Error(`The VM did not open ${url} within ${opts.timeout} seconds`);
-
-		// The first request may have been the browser prefetching, so the real navigation gets a moment to arrive.
-		await sleep(3000);
-		console.log('Redirected the VM to a new Canvas session');
+		await io.track('Logging into Canvas on the VM', qemu.loginToCanvas(path, opts));
 	});
 
 const cli_auto = cli

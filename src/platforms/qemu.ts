@@ -1,17 +1,23 @@
 import { Manager } from '@james-pre/config';
+import XMLBuilder from 'fast-xml-builder';
+import { errorText } from 'ioium';
 import * as io from 'ioium/node';
-import sharp from 'sharp';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { appendFileSync, existsSync, mkdtempDisposableSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { cpus, machine, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout } from 'node:timers/promises';
+import sharp from 'sharp';
 import * as z from 'zod';
 import { debugMode } from '../config.js';
 import { dataDir } from '../data.js';
 import { onAdd, prompt, select } from '../discovery.js';
 import * as llm from '../llm.js';
-import XMLBuilder from 'fast-xml-builder';
+import * as canvas from './canvas/api.js';
 
 export const QemuData = z.object({
 	url: z.url().default('qemu:///session'),
@@ -101,12 +107,6 @@ export function assertRunning(): void {
 		throw new Error(`Domain '${domain()}' is not ${state == 'shut off' ? 'running' : `running (${state})`} on ${data.url}`);
 }
 
-function sleep(ms: number): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, ms);
-	return promise;
-}
-
 /**
  * Capture the guest's screen, crop it, and write it to `path`.
  * Returns the dimensions of the cropped image.
@@ -163,7 +163,7 @@ export async function scroll(count: number = data.scroll.count): Promise<void> {
 			io.warn('could not scroll:', io.errorText(e));
 			return;
 		}
-		await sleep(delay);
+		await setTimeout(delay);
 	}
 }
 
@@ -229,7 +229,7 @@ function sendKeys(text: string, combinations: string[][]): void {
 /** Press a key combination, e.g. `press('KEY_LEFTCTRL', 'KEY_L')` */
 export async function press(...keys: string[]): Promise<void> {
 	sendKeys(`Pressing ${keys.join('+')}`, [keys]);
-	await sleep(data.keyHold);
+	await setTimeout(data.keyHold);
 }
 
 /** Type text into whatever has focus in the guest, assuming the guest uses a US keyboard layout. */
@@ -242,7 +242,70 @@ export async function type(text: string): Promise<void> {
 		`Typing ${characters.length} characters`,
 		characters.map(character => usLayout.get(character)!)
 	);
-	await sleep(characters.length * data.keyHold);
+	await setTimeout(characters.length * data.keyHold);
+}
+
+export interface CanvasLoginOptions {
+	type?: boolean;
+	focus?: boolean;
+	timeout?: number;
+}
+
+export async function loginToCanvas(path: string = '/', opts: CanvasLoginOptions = {}) {
+	assertRunning();
+
+	if (!canvas.data.origin) throw new Error('Canvas is not set up, run `eedu discover canvas`');
+
+	const target = new URL(path, canvas.data.origin).href;
+
+	const served = Promise.withResolvers<void>();
+
+	const server = createServer(async (request, response) => {
+		if (request.method != 'GET' || new URL(request.url ?? '/', 'http://localhost').pathname != '/') {
+			response.writeHead(404).end();
+			return;
+		}
+
+		try {
+			const { session_url } = await canvas.api<{ session_url: string }>(
+				'GET',
+				'login/session_token?return_to=' + encodeURIComponent(target)
+			);
+			response.writeHead(302, { Location: session_url, 'Cache-Control': 'no-store' }).end();
+			served.resolve();
+		} catch (error) {
+			response.writeHead(502, { 'Content-Type': 'text/plain' }).end(errorText(error));
+		}
+	});
+
+	server.listen(0, '127.0.0.1');
+	await once(server, 'listening');
+
+	const { port } = server.address() as AddressInfo;
+
+	using _ = {
+		[Symbol.dispose]() {
+			server.close();
+			server.closeAllConnections();
+		},
+	};
+
+	const url = `http://${data.hostAddress}:${port}`;
+
+	if (opts.type) {
+		if (opts.focus) {
+			await press('KEY_LEFTCTRL', 'KEY_L');
+			await setTimeout(300);
+		}
+		await type(url + '\n');
+	}
+
+	const { timeout = 120 } = opts;
+	const result = await Promise.race([served.promise, setTimeout(timeout * 1000, 'timeout', { ref: false })]);
+	if (result == 'timeout') throw new Error(`The VM did not open ${url} within ${timeout} seconds`);
+
+	// The first request may have been the browser prefetching, so the real navigation gets a moment to arrive.
+	await setTimeout(3000);
 }
 
 export async function discover() {
@@ -329,7 +392,7 @@ export async function autoComplete(opts: AutoOptions) {
 
 	if (opts.initialScroll) {
 		await scroll(opts.initialScroll);
-		await sleep(data.renderDelay);
+		await setTimeout(data.renderDelay);
 	}
 
 	let previous = '';
@@ -374,7 +437,7 @@ export async function autoComplete(opts: AutoOptions) {
 		if (!opts.scroll) break;
 
 		await scroll();
-		await sleep(data.renderDelay);
+		await setTimeout(data.renderDelay);
 	}
 
 	opts.onDone?.(total, out);

@@ -1,12 +1,8 @@
 import { Manager } from '@james-pre/config';
-import { once } from 'node:events';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import * as z from 'zod';
 import $pkg from '../../../package.json' with { type: 'json' };
 import { dataDir } from '../../data.js';
-import { errorText } from 'ioium';
 
 export const CanvasData = z
 	.object({
@@ -73,57 +69,6 @@ async function request(method: string, endpoint: string, body?: any, headers: Re
 export async function api<T = any>(method: string, endpoint: string, body?: any, headers: Record<string, string> = {}): Promise<T> {
 	const { json } = await request(method, endpoint, body, headers);
 	return json;
-}
-
-/**
- * Create a short-lived, one-time URL that signs a browser into Canvas as the token's user, bypassing SSO.
- * @param returnTo Page to land on, relative to the Canvas origin
- */
-export async function sessionURL(returnTo: string = '/'): Promise<string> {
-	if (!data.origin) throw new Error('Canvas is not set up, run `eedu discover canvas`');
-	const target = new URL(returnTo, data.origin).href;
-	const { session_url } = await api<{ session_url: string }>('GET', 'login/session_token?return_to=' + encodeURIComponent(target));
-	return session_url;
-}
-
-export interface SessionServer extends Disposable {
-	port: number;
-	/** Resolves once a browser has been redirected to a session */
-	served: Promise<void>;
-}
-
-/**
- * Serve redirects to fresh Canvas sessions on the host's loopback, minting a new session for every request to `/`.
- * @param returnTo Page to land on, relative to the Canvas origin
- */
-export async function serveSession(returnTo: string = '/'): Promise<SessionServer> {
-	const { promise: served, resolve } = Promise.withResolvers<void>();
-
-	const server = createServer(async (request, response) => {
-		if (request.method != 'GET' || new URL(request.url ?? '/', 'http://localhost').pathname != '/') {
-			response.writeHead(404).end();
-			return;
-		}
-
-		try {
-			response.writeHead(302, { Location: await sessionURL(returnTo), 'Cache-Control': 'no-store' }).end();
-			resolve();
-		} catch (error) {
-			response.writeHead(502, { 'Content-Type': 'text/plain' }).end(errorText(error));
-		}
-	});
-
-	server.listen(0, '127.0.0.1');
-	await once(server, 'listening');
-
-	return {
-		port: (server.address() as AddressInfo).port,
-		served,
-		[Symbol.dispose]() {
-			server.close();
-			server.closeAllConnections();
-		},
-	};
 }
 
 /** GET every page of a list endpoint */
