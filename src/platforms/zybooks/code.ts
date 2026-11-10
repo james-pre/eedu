@@ -1,48 +1,11 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { run } from '../../utils.js';
 import type { ContentResource, TestCase } from './types.js';
 
 const exec = promisify(execFile);
-
-interface Run {
-	stdout: string;
-	stderr: string;
-	code: number | null;
-	timedOut: boolean;
-}
-
-/** Run a program with `input` on its standard input, killing it if it takes longer than `timeout` */
-function run(command: string, args: string[], cwd: string, input: string, timeout: number): Promise<Run> {
-	const { promise, resolve, reject } = Promise.withResolvers<Run>();
-	const child = spawn(command, args, { cwd });
-
-	let stdout = '';
-	let stderr = '';
-	let timedOut = false;
-
-	const timer = setTimeout(() => {
-		timedOut = true;
-		child.kill('SIGKILL');
-	}, timeout);
-
-	child.stdout.on('data', chunk => (stdout += chunk));
-	child.stderr.on('data', chunk => (stderr += chunk));
-	child.on('error', error => {
-		clearTimeout(timer);
-		reject(error);
-	});
-	child.on('close', code => {
-		clearTimeout(timer);
-		resolve({ stdout, stderr, code, timedOut });
-	});
-
-	child.stdin.on('error', () => {});
-	child.stdin.end(input);
-
-	return promise;
-}
 
 /** How a source file is built and run, by extension */
 const languages: Record<string, { name: string; build?(file: string): string[]; run(file: string): string[] }> = {
@@ -112,7 +75,7 @@ export async function runTests(dir: string, file: string, tests: TestCase[], tim
 
 	for (const test of tests) {
 		const extra = test.argStr ? test.argStr.split(/\s+/) : [];
-		const { stdout, stderr, code, timedOut } = await run(command, [...args, ...extra], dir, test.stdin ?? '', timeout);
+		const { stdout, stderr, code, timedOut } = await run(command, [...args, ...extra], { cwd: dir, input: test.stdin, timeout });
 
 		const error = timedOut
 			? `timed out after ${timeout / 1000}s, so it is probably waiting for input it was not given`

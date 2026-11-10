@@ -1,11 +1,11 @@
 import * as io from 'ioium/node';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import sharp from 'sharp';
-import { debugMode } from '../../config.js';
+import { runSync } from '../../utils.js';
 import { data, name as domain } from './data.js';
 
 /**
@@ -151,25 +151,6 @@ export async function typeText(text: string): Promise<void> {
 /** Screenshots are kept here only while they're being used */
 export const tempPrefix = join(tmpdir(), 'eedu-qemu-');
 
-/**
- * Run a command and return its stdout.
- * A tracked "Doing something... done." line for every screenshot, scroll event, and page
- * buries the answers, so the status line is only shown when debugging.
- */
-function run(text: string, timeout: number, command: string, ...args: string[]): string {
-	if (debugMode) {
-		io.setCommandTimeout(timeout);
-		return io.trackCommand({ text }, command, ...args);
-	}
-
-	try {
-		return execFileSync(command, args, { encoding: 'utf-8', timeout, stdio: ['ignore', 'pipe', 'pipe'] });
-	} catch (e: any) {
-		const stderr = typeof e?.stderr == 'string' ? e.stderr.trim() : '';
-		throw new Error(stderr.slice(0, 200) || io.errorText(e));
-	}
-}
-
 export function virsh(text: string, ...args: string[]): string {
-	return run(text, virshTimeout, 'virsh', '-c', data.url, ...args);
+	return runSync(text, virshTimeout, 'virsh', '-c', data.url, ...args);
 }
