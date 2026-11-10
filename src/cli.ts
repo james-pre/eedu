@@ -15,7 +15,7 @@ import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
 import * as canvas from './platforms/canvas/index.js';
-import * as qemu from './platforms/qemu.js';
+import * as qemu from './platforms/qemu/index.js';
 import * as zybooks from './platforms/zybooks/index.js';
 import * as grades from './grades.js';
 import * as llm from './llm.js';
