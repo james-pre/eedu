@@ -162,9 +162,21 @@ cli_qemu
 
 cli_qemu
 	.command('start')
-	.description('Start the VM, or resume it if paused')
-	.action(() => {
-		io.track('Starting the VM', () => qemu.start());
+	.description('Start the VM, or resume it if paused, and wait for the desktop')
+	.option('--no-wait', 'Return once the VM has started, without waiting for Windows to log on')
+	.option('-t, --timeout <seconds>', 'Seconds to wait for Windows to log on', v => parseInt(v), 300)
+	.action(async opts => {
+		if (opts.wait) await io.track('Starting the VM and waiting for the desktop', qemu.boot(opts));
+		else io.track('Starting the VM', () => qemu.start());
+	});
+
+cli_qemu
+	.command('setup')
+	.description('Install a logon hook in the VM, so `eedu vm start` can tell when the desktop is ready')
+	.option('--remove', 'Remove the logon hook instead', false)
+	.action(async opts => {
+		if (opts.remove) await io.track('Removing the logon hook', qemu.removeLogonHook());
+		else await io.track('Installing the logon hook', qemu.installLogonHook());
 	});
 
 cli_qemu

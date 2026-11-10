@@ -9,7 +9,7 @@ import { press, typeText } from './io.js';
 
 export type RouteHandler = (request: IncomingMessage, response: ServerResponse) => unknown;
 
-function powershellString(value: string): string {
+export function powershellString(value: string): string {
 	return `'${value.replaceAll("'", "''")}'`;
 }
 

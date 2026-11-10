@@ -44,6 +44,8 @@ export const QemuData = z.object({
 	hostAddress: z.string().default('10.0.2.2'),
 	/** Program the guest opens URLs with, falling back to its default browser if it can not be started */
 	browser: z.string().default('chrome'),
+	/** Port on the host that the guest's logon hook connects to. Changing it requires running `eedu vm setup` again. */
+	logonPort: z.int().min(1).max(65535).default(47613),
 });
 
 export interface QemuData extends z.infer<typeof QemuData> {}
