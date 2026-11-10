@@ -78,7 +78,7 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 	 * Resolves once the guest has fetched the script, not once it has finished running.
 	 * @param timeout Seconds to wait for the guest to fetch the script
 	 */
-	async runScript(script: string, timeout: number = 30): Promise<void> {
+	async runScript(script: string, timeout: number = 30, elevated: boolean = false): Promise<void> {
 		const path = `/scripts/${++this.scripts}`;
 		const fetched = Promise.withResolvers<void>();
 
@@ -91,7 +91,16 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 		try {
 			await press('KEY_LEFTMETA', 'KEY_R');
 			await setTimeout(500);
-			await typeText(`powershell -nop -w h -c irm ${this.url(path)}|iex\n`);
+
+			if (!elevated) {
+				await typeText(`powershell -nop -w h -c irm ${this.url(path)}|iex\n`);
+			} else {
+				await typeText(`powershell -nop -w h -c irm ${this.url(path)}|iex`);
+				await press('KEY_LEFTCTRL', 'KEY_LEFTSHIFT', 'KEY_ENTER');
+				await setTimeout(2000);
+				await press('KEY_LEFTALT', 'KEY_Y');
+			}
+
 			await withTimeout(fetched.promise, timeout, `The VM did not fetch ${this.url(path)} within ${timeout} seconds`);
 		} finally {
 			this.routes.delete(path);
@@ -102,8 +111,9 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 	 * Run a PowerShell script in the guest and wait for it to finish, collecting everything it writes.
 	 * A script that calls `exit` never reports back, so it times out.
 	 * @param timeout Seconds to wait for the script to finish once the guest has fetched it
+	 * @param elevated Whether to run the script with elevated privileges
 	 */
-	async execute(script: string, timeout: number = 120): Promise<ScriptResult> {
+	async execute(script: string, timeout: number = 120, elevated: boolean = false): Promise<ScriptResult> {
 		const path = `/results/${++this.scripts}`;
 		const finished = Promise.withResolvers<ScriptResult>();
 
@@ -130,7 +140,7 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 		].join('\n');
 
 		try {
-			await this.runScript(wrapper);
+			await this.runScript(wrapper, timeout, elevated);
 			return await withTimeout(finished.promise, timeout, `The script did not finish in the VM within ${timeout} seconds`);
 		} finally {
 			this.routes.delete(path);
@@ -154,8 +164,8 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 }
 
 /** Run a PowerShell script in the guest through a temporary {@link HostServer}, and wait for it to finish. */
-export async function execute(script: string, timeout?: number): Promise<ScriptResult> {
+export async function execute(script: string, timeout?: number, elevated?: boolean): Promise<ScriptResult> {
 	assertRunning();
 	await using server = await new HostServer().start();
-	return await server.execute(script, timeout);
+	return await server.execute(script, timeout, elevated);
 }

@@ -184,6 +184,7 @@ cli_qemu
 	.command('script')
 	.description('Run PowerShell in the VM and print its output. Put `--` before commands with their own options.')
 	.argument('[command...]', 'PowerShell to run, joined with spaces')
+	.option('-e, --elevated', 'Run the script with elevated privileges')
 	.option('-f, --file <path>', 'Run a script file instead, or standard input with -')
 	.option('-t, --timeout <seconds>', 'Seconds to wait for the script to finish', v => parseInt(v), 120)
 	.action(async (command, opts) => {
@@ -192,7 +193,7 @@ cli_qemu
 		const script = opts.file ? readFileSync(opts.file == '-' ? 0 : opts.file, 'utf-8') : command.join(' ');
 		if (!script.trim()) throw new Error('Nothing to run, give a command or --file');
 
-		const { output, failed } = await qemu.execute(script, opts.timeout);
+		const { output, failed } = await qemu.execute(script, opts.timeout, opts.elevated);
 		if (output) (failed ? process.stderr : process.stdout).write(output + '\n');
 		if (failed) process.exitCode = 1;
 	});
