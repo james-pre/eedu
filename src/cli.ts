@@ -1,25 +1,22 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
 import { basename } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { styleText, type InspectColor } from 'node:util';
 import * as z from 'zod';
 import $pkg from '../package.json' with { type: 'json' };
 import * as assignments from './assignments.js';
 import * as auto from './auto.js';
-import { doctor } from './doctor.js';
-import * as documents from './documents.js';
-import * as labs from './platforms/zybooks/labs.js';
 import { config, debugMode } from './config.js';
 import { matchCourses, school, type Course } from './data.js';
 import { setHandlers } from './discovery.js';
+import { doctor } from './doctor.js';
+import * as documents from './documents.js';
+import * as grades from './grades.js';
+import * as llm from './llm.js';
 import * as canvas from './platforms/canvas/index.js';
 import * as qemu from './platforms/qemu/index.js';
 import * as zybooks from './platforms/zybooks/index.js';
-import * as grades from './grades.js';
-import * as llm from './llm.js';
-import type * as canvasTypes from './platforms/canvas/types.js';
 import { htmlToText, markdownToTerminal, readText, textFormats, toHTML, type Text } from './text.js';
 
 const cli = new Command('eedu').version($pkg.version).description($pkg.description);
@@ -229,7 +226,7 @@ cli_auto
 							labNames.set(lab.resource.id, lab.name);
 							console.log(`${styleText('green', 'Starting')} ${lab.name}`);
 							try {
-								const result = await labs.lab(lab, {
+								const result = await zybooks.labs.auto(lab, {
 									...agentHandlers(undefined, tool => tool.startsWith('mcp__lab__')),
 									model: options.model,
 									force: options.force,
@@ -778,7 +775,7 @@ function parseId(value: string): number {
 
 interface DiscussionRow {
 	course: Course;
-	topic: canvasTypes.DiscussionTopic;
+	topic: canvas.DiscussionTopic;
 }
 
 async function listTopics(courses: Course[], options: canvas.DiscussionListOptions & { open?: boolean } = {}): Promise<DiscussionRow[]> {
@@ -792,7 +789,7 @@ async function listTopics(courses: Course[], options: canvas.DiscussionListOptio
 	return rows;
 }
 
-function topicStatus(topic: canvasTypes.DiscussionTopic): string {
+function topicStatus(topic: canvas.DiscussionTopic): string {
 	const text = [
 		topic.unread_count && styleText('cyan', `${topic.unread_count} unread`),
 		!topic.user_can_see_posts && topic.require_initial_post && styleText('yellow', 'post first'),
@@ -866,7 +863,7 @@ cli_discussions
 		);
 		console.log('\n' + htmlToText(topic.message) + '\n');
 
-		let view: canvasTypes.DiscussionView;
+		let view: canvas.DiscussionView;
 		try {
 			view = await canvas.viewDiscussion(course, topic.id);
 		} catch (e) {
@@ -878,7 +875,7 @@ cli_discussions
 		const names = new Map(view.participants.map(p => [p.id, p.display_name]));
 		const unread = new Set(view.unread_entries);
 
-		const printEntry = (entry: canvasTypes.DiscussionViewEntry, depth: number) => {
+		const printEntry = (entry: canvas.DiscussionViewEntry, depth: number) => {
 			const indent = '    '.repeat(depth);
 			if (entry.deleted) console.log(indent + styleText('dim', 'Deleted entry'));
 			else {

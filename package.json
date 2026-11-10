@@ -17,6 +17,7 @@
 	},
 	"exports": {
 		".": "./dist/index.js",
+		"./platforms/*": "./dist/platforms/*/index.js",
 		"./*": "./dist/*.js"
 	},
 	"files": [

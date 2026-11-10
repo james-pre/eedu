@@ -5,3 +5,4 @@ export * from './discussions.js';
 export * from './files.js';
 export * from './grades.js';
 export * from './syllabus.js';
+export type * from './types.js';

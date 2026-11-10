@@ -84,7 +84,7 @@ export function labText(resource: zybooks.ContentResource): string {
 	return lines.join('\n').trim();
 }
 
-export interface LabOptions extends Omit<AgentOptions, 'dir' | 'readable' | 'writable' | 'mcpServers' | 'allowedTools' | 'askTools'> {
+export interface Options extends Omit<AgentOptions, 'dir' | 'readable' | 'writable' | 'mcpServers' | 'allowedTools' | 'askTools'> {
 	/** Extra instructions from the student */
 	instructions?: string;
 	/** Do the lab again even when every point has been earned */
@@ -94,7 +94,7 @@ export interface LabOptions extends Omit<AgentOptions, 'dir' | 'readable' | 'wri
 	onLabRunning?(resources: number[]): Promise<boolean>;
 }
 
-export interface LabResult extends AgentResult {
+export interface Result extends AgentResult {
 	points: number;
 	possible: number;
 	/** Whether zyBooks recorded the points, which only happens for IT labs */
@@ -104,15 +104,15 @@ export interface LabResult extends AgentResult {
 }
 
 /** Have Claude work through a lab, on VMs for an IT lab or as code for a programming lab */
-export function lab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
-	return zybooks.isItLab(lab.resource) ? itLab(lab, options) : codeLab(lab, options);
+export function auto(lab: zybooks.Lab, options: Options): Promise<Result> {
+	return zybooks.isItLab(lab.resource) ? it(lab, options) : code(lab, options);
 }
 
 /**
  * Have Claude work through an IT lab on its VMs.
  * The VMs are started before the agent runs and deleted once it is done, since they are billed for as long as they run.
  */
-export async function itLab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
+export async function it(lab: zybooks.Lab, options: Options): Promise<Result> {
 	const { zybook_code, zybook_id, resource } = lab;
 	const status = (text: string) => options.onStatus?.(text);
 
@@ -374,7 +374,7 @@ function testText(test: zybooks.TestCase, index: number): string {
  * Have Claude write a programming lab and check it against the lab's own test cases.
  * The lab's files come from the student's zyStudio workspace, and the finished code is written back and submitted there.
  */
-export async function codeLab(lab: zybooks.Lab, options: LabOptions): Promise<LabResult> {
+export async function code(lab: zybooks.Lab, options: Options): Promise<Result> {
 	const { zybook_code, zybook_id, resource } = lab;
 	const status = (text: string) => options.onStatus?.(text);
 
