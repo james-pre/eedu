@@ -2,13 +2,50 @@ import XMLBuilder from 'fast-xml-builder';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { cpus, machine, totalmem } from 'node:os';
+import { setTimeout } from 'node:timers/promises';
 import { data, name } from './data.js';
 import { virsh } from './io.js';
 
+/** The domain's state as virsh reports it, e.g. `running`, `paused` or `shut off` */
+export function state(): string {
+	return virsh(`Checking ${name()}`, 'domstate', name()).trim();
+}
+
 export function assertRunning(): void {
-	const state = virsh(`Checking ${name()}`, 'domstate', name()).trim();
-	if (state != 'running')
-		throw new Error(`Domain '${name()}' is not ${state == 'shut off' ? 'running' : `running (${state})`} on ${data.url}`);
+	const current = state();
+	if (current != 'running')
+		throw new Error(`Domain '${name()}' is not ${current == 'shut off' ? 'running' : `running (${current})`} on ${data.url}`);
+}
+
+/** Start the domain, or resume it if it is paused. Does nothing if it is already running. */
+export function start(): void {
+	const current = state();
+	if (current == 'running') return;
+	if (current == 'paused') virsh(`Resuming ${name()}`, 'resume', name());
+	else virsh(`Starting ${name()}`, 'start', name());
+}
+
+export interface StopOptions {
+	/** Power off immediately instead of asking the guest to shut down */
+	force?: boolean;
+	/** Seconds to wait for the guest to shut down before powering it off */
+	timeout?: number;
+}
+
+/** Ask the guest to shut down, and power it off if it has not within the timeout. */
+export async function stop({ force = false, timeout = 60 }: StopOptions = {}): Promise<void> {
+	if (state() == 'shut off') return;
+
+	if (!force) {
+		virsh(`Shutting down ${name()}`, 'shutdown', name());
+
+		for (const deadline = Date.now() + timeout * 1000; Date.now() < deadline;) {
+			await setTimeout(1000);
+			if (state() == 'shut off') return;
+		}
+	}
+
+	virsh(`Powering off ${name()}`, 'destroy', name());
 }
 
 export interface DomainInit {

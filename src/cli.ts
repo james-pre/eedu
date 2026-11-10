@@ -161,6 +161,22 @@ cli_qemu
 		console.log('Logged into Canvas on the VM');
 	});
 
+cli_qemu
+	.command('start')
+	.description('Start the VM, or resume it if paused')
+	.action(() => {
+		io.track('Starting the VM', () => qemu.start());
+	});
+
+cli_qemu
+	.command('stop')
+	.description('Shut down the VM, powering it off if it does not shut down in time')
+	.option('-f, --force', 'Power off immediately', false)
+	.option('-t, --timeout <seconds>', 'Seconds to wait for the guest to shut down', v => parseInt(v), 60)
+	.action(async opts => {
+		await io.track('Stopping the VM', qemu.stop(opts));
+	});
+
 const cli_auto = cli
 	.command('autocomplete')
 	.alias('auto')
