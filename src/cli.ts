@@ -148,11 +148,10 @@ cli_qemu
 	.command('login')
 	.description("Sign the VM's browser into Canvas with the host's access token, without going through SSO")
 	.argument('[path]', 'Canvas page to open once signed in', '/')
-	.option('--no-type', 'Only print the address to open in the VM, instead of typing it')
-	.option('--no-focus', 'Type into whatever has focus instead of pressing Ctrl+L to select the address bar')
+	.option('--no-open', "Only print the address to open in the VM, instead of opening it in the VM's browser")
 	.option('-t, --timeout <seconds>', 'Give up if the VM has not opened the address by then', v => parseInt(v), 120)
 	.action(async (path, opts) => {
-		if (opts.type) {
+		if (opts.open) {
 			await io.track('Logging into Canvas on the VM', qemu.loginToCanvas(path, opts));
 			return;
 		}

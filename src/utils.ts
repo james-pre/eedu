@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { debugMode } from './config.js';
 import * as io from 'ioium/node';
 
@@ -67,6 +68,17 @@ export function runSync(text: string, timeout: number, command: string, ...args:
 		const stderr = typeof e?.stderr == 'string' ? e.stderr.trim() : '';
 		throw new Error(stderr.slice(0, 200) || io.errorText(e));
 	}
+}
+
+/**
+ * Throw `message` if `promise` has not settled in time.
+ * @param timeout In seconds
+ */
+export async function withTimeout<T>(promise: Promise<T>, timeout: number, message: string): Promise<T> {
+	const timedOut = Symbol('timeout');
+	const result = await Promise.race([promise, sleep(timeout * 1000, timedOut, { ref: false })]);
+	if (result === timedOut) throw new Error(message);
+	return result as T;
 }
 
 /**

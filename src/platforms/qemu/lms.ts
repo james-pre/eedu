@@ -1,12 +1,12 @@
 import { setTimeout } from 'node:timers/promises';
+import { withTimeout } from '../../utils.js';
 import * as canvas from '../canvas/api.js';
 import { assertRunning } from './domain.js';
-import { press, typeText } from './io.js';
 import { HostServer } from './server.js';
 
 export interface CanvasLoginOptions {
-	type?: boolean;
-	focus?: boolean;
+	/** Open the address in the guest's browser, instead of only waiting for it to be opened */
+	open?: boolean;
 	/** Seconds to wait for the guest to open the address */
 	timeout?: number;
 	/** Called with the address the guest needs to open, once it can be opened */
@@ -35,17 +35,10 @@ export async function loginToCanvas(path: string = '/', opts: CanvasLoginOptions
 	const url = server.url('/canvas_login');
 	opts.onListening?.(url);
 
-	if (opts.type) {
-		if (opts.focus) {
-			await press('KEY_LEFTCTRL', 'KEY_L');
-			await setTimeout(300);
-		}
-		await typeText(url + '\n');
-	}
+	if (opts.open) await server.open(url);
 
 	const { timeout = 120 } = opts;
-	const result = await Promise.race([served.promise, setTimeout(timeout * 1000, 'timeout', { ref: false })]);
-	if (result == 'timeout') throw new Error(`The VM did not open ${url} within ${timeout} seconds`);
+	await withTimeout(served.promise, timeout, `The VM did not open ${url} within ${timeout} seconds`);
 
 	// The first request may have been the browser prefetching, so the real navigation gets a moment to arrive.
 	await setTimeout(3000);
