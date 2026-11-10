@@ -1,8 +1,8 @@
 import { setTimeout } from 'node:timers/promises';
 import { withTimeout } from '../../utils.js';
 import { data } from './data.js';
-import { assertRunning, start, state } from './domain.js';
-import { HostServer, powershellString } from './server.js';
+import { start, state } from './domain.js';
+import { execute, HostServer, powershellString } from './server.js';
 
 const runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const hookName = 'eedu';
@@ -13,32 +13,20 @@ function hookCommand(): string {
 	return `powershell -nop -w h -c "for($i=0;$i -lt 120;$i++){try{$s=irm ${url};break}catch{sleep 5}};if($s){iex $s}"`;
 }
 
-/** Run `script` in the guest and wait until it reports back, so failures are not silent. */
-async function runConfirmed(script: string, timeout: number = 60): Promise<void> {
-	const done = Promise.withResolvers<void>();
-
-	await using server = await new HostServer()
-		.route('/done', (_, response) => {
-			response.end();
-			done.resolve();
-		})
-		.start();
-
-	await server.runScript(`${script}; irm ${powershellString(server.url('/done'))}`);
-	await withTimeout(done.promise, timeout, `The script did not finish in the VM within ${timeout} seconds`);
+async function executeChecked(script: string): Promise<void> {
+	const { output, failed } = await execute(script);
+	if (failed) throw new Error(output || 'The script failed in the VM');
 }
 
 /** Make the guest contact the host every time a user logs on, which is how {@link boot} knows the desktop is ready. */
 export async function installLogonHook(): Promise<void> {
-	assertRunning();
-	await runConfirmed(
-		`Set-ItemProperty -Path ${powershellString(runKey)} -Name ${powershellString(hookName)} -Value ${powershellString(hookCommand())}`
+	await executeChecked(
+		`Set-ItemProperty -Path ${powershellString(runKey)} -Name ${powershellString(hookName)} -Value ${powershellString(hookCommand())} -ErrorAction Stop`
 	);
 }
 
 export async function removeLogonHook(): Promise<void> {
-	assertRunning();
-	await runConfirmed(
+	await executeChecked(
 		`Remove-ItemProperty -Path ${powershellString(runKey)} -Name ${powershellString(hookName)} -ErrorAction SilentlyContinue`
 	);
 }

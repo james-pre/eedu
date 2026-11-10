@@ -5,9 +5,17 @@ import type { AddressInfo } from 'node:net';
 import { setTimeout } from 'node:timers/promises';
 import { withTimeout } from '../../utils.js';
 import { data } from './data.js';
+import { assertRunning } from './domain.js';
 import { press, typeText } from './io.js';
 
 export type RouteHandler = (request: IncomingMessage, response: ServerResponse) => unknown;
+
+export interface ScriptResult {
+	/** Everything the script wrote to any stream, formatted as PowerShell displays it */
+	output: string;
+	/** Whether the script stopped on a terminating error */
+	failed: boolean;
+}
 
 export function powershellString(value: string): string {
 	return `'${value.replaceAll("'", "''")}'`;
@@ -90,6 +98,45 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 		}
 	}
 
+	/**
+	 * Run a PowerShell script in the guest and wait for it to finish, collecting everything it writes.
+	 * A script that calls `exit` never reports back, so it times out.
+	 * @param timeout Seconds to wait for the script to finish once the guest has fetched it
+	 */
+	async execute(script: string, timeout: number = 120): Promise<ScriptResult> {
+		const path = `/results/${++this.scripts}`;
+		const finished = Promise.withResolvers<ScriptResult>();
+
+		this.route(path, async (request, response) => {
+			this.routes.delete(path);
+			const chunks: Buffer[] = [];
+			for await (const chunk of request) chunks.push(chunk);
+			response.end();
+			finished.resolve({
+				output: Buffer.concat(chunks).toString('utf-8').trimEnd(),
+				failed: new URL(request.url ?? '/', 'http://localhost').searchParams.has('failed'),
+			});
+		});
+
+		const encoded = Buffer.from(script, 'utf-8').toString('base64');
+		const wrapper = [
+			"$ProgressPreference = 'SilentlyContinue'",
+			'$output = [Collections.Generic.List[object]]::new()',
+			"$failed = ''",
+			`try { & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))) *>&1 | ForEach-Object { $output.Add($_) } }`,
+			"catch { $output.Add($_); $failed = '?failed' }",
+			'$text = $output | Out-String -Width 160',
+			`irm -Method Post -Uri (${powershellString(this.url(path))} + $failed) -ContentType 'text/plain; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($text))`,
+		].join('\n');
+
+		try {
+			await this.runScript(wrapper);
+			return await withTimeout(finished.promise, timeout, `The script did not finish in the VM within ${timeout} seconds`);
+		} finally {
+			this.routes.delete(path);
+		}
+	}
+
 	/** Open `url` in the guest with {@link QemuData.browser} */
 	async open(url: string): Promise<void> {
 		const browser = powershellString(data.browser);
@@ -104,4 +151,11 @@ export class HostServer extends HTTPServer implements AsyncDisposable {
 		this.closeAllConnections();
 		await promise;
 	}
+}
+
+/** Run a PowerShell script in the guest through a temporary {@link HostServer}, and wait for it to finish. */
+export async function execute(script: string, timeout?: number): Promise<ScriptResult> {
+	assertRunning();
+	await using server = await new HostServer().start();
+	return await server.execute(script, timeout);
 }

@@ -1,5 +1,6 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import * as io from 'ioium/node';
+import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { styleText, type InspectColor } from 'node:util';
@@ -177,6 +178,23 @@ cli_qemu
 	.action(async opts => {
 		if (opts.remove) await io.track('Removing the logon hook', qemu.removeLogonHook());
 		else await io.track('Installing the logon hook', qemu.installLogonHook());
+	});
+
+cli_qemu
+	.command('script')
+	.description('Run PowerShell in the VM and print its output. Put `--` before commands with their own options.')
+	.argument('[command...]', 'PowerShell to run, joined with spaces')
+	.option('-f, --file <path>', 'Run a script file instead, or standard input with -')
+	.option('-t, --timeout <seconds>', 'Seconds to wait for the script to finish', v => parseInt(v), 120)
+	.action(async (command, opts) => {
+		if (opts.file && command.length) throw new Error('Give either a command or --file, not both');
+
+		const script = opts.file ? readFileSync(opts.file == '-' ? 0 : opts.file, 'utf-8') : command.join(' ');
+		if (!script.trim()) throw new Error('Nothing to run, give a command or --file');
+
+		const { output, failed } = await qemu.execute(script, opts.timeout);
+		if (output) (failed ? process.stderr : process.stdout).write(output + '\n');
+		if (failed) process.exitCode = 1;
 	});
 
 cli_qemu
