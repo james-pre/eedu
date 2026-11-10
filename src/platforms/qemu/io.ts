@@ -1,11 +1,12 @@
 import * as io from 'ioium/node';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import sharp from 'sharp';
-import { runSync } from '../../utils.js';
+import { runSync, withTimeout } from '../../utils.js';
 import { data, name as domain } from './data.js';
 
 /**
@@ -111,28 +112,35 @@ for (const [key, plain, shifted] of [
 const virshTimeout = 30_000;
 
 /**
- * Send key combinations through one virsh process.
- * QEMU queues them behind each other, each held for {@link QemuData.keyHold}, so this returns before the guest has received them all.
+ * Send key combinations through one virsh process, one every two {@link QemuData.keyHold}s.
+ * QEMU silently drops key events once its input queue is full, so sending them faster loses keys, including modifier releases.
  */
-function sendKeys(text: string, combinations: string[][]): void {
+async function sendKeys(text: string, combinations: string[][]): Promise<void> {
 	const name = '"' + domain().replace(/["\\]/g, '\\$&') + '"';
-	const commands = combinations.map(keys => `send-key ${name} --codeset linux --holdtime ${data.keyHold} ${keys.join(' ')}`);
 
 	io.debug(text);
 
-	const result = spawnSync('virsh', ['-q', '-c', data.url], {
-		input: commands.join('\n') + '\n',
-		encoding: 'utf-8',
-		timeout: virshTimeout,
-	});
-	const error = result.error ?? result.stderr.match(/^error: .*/m)?.[0];
+	const child = spawn('virsh', ['-q', '-c', data.url], { stdio: ['pipe', 'ignore', 'pipe'] });
+	const exited = once(child, 'close');
+	let stderr = '';
+	child.stderr.setEncoding('utf-8').on('data', chunk => (stderr += chunk));
+	child.stdin.on('error', () => {});
+
+	for (const keys of combinations) {
+		if (child.exitCode !== null || /^error: /m.test(stderr)) break;
+		child.stdin.write(`send-key ${name} --codeset linux --holdtime ${data.keyHold} ${keys.join(' ')}\n`);
+		await setTimeout(data.keyHold * 2);
+	}
+	child.stdin.end();
+
+	await withTimeout(exited, virshTimeout / 1000, `${text} failed: virsh did not exit`);
+	const error = stderr.match(/^error: .*/m)?.[0];
 	if (error) throw new Error(`${text} failed: ${error}`);
 }
 
 /** Press a key combination, e.g. `press('KEY_LEFTCTRL', 'KEY_L')` */
 export async function press(...keys: string[]): Promise<void> {
-	sendKeys(`Pressing ${keys.join('+')}`, [keys]);
-	await setTimeout(data.keyHold);
+	await sendKeys(`Pressing ${keys.join('+')}`, [keys]);
 }
 
 /** Type text into whatever has focus in the guest, assuming the guest uses a US keyboard layout. */
@@ -141,11 +149,10 @@ export async function typeText(text: string): Promise<void> {
 	const unsupported = [...new Set(characters.filter(character => !usLayout.has(character)))];
 	if (unsupported.length) throw new Error('Can not type ' + unsupported.map(character => JSON.stringify(character)).join(', '));
 
-	sendKeys(
+	await sendKeys(
 		`Typing ${characters.length} characters`,
 		characters.map(character => usLayout.get(character)!)
 	);
-	await setTimeout(characters.length * data.keyHold);
 }
 
 /** Screenshots are kept here only while they're being used */

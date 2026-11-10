@@ -17,12 +17,19 @@ export function assertRunning(): void {
 		throw new Error(`Domain '${name()}' is not ${current == 'shut off' ? 'running' : `running (${current})`} on ${data.url}`);
 }
 
-/** Start the domain, or resume it if it is paused. Does nothing if it is already running. */
-export function start(): void {
+/**
+ * Start the domain, or resume it if it is paused. Does nothing if it is already running.
+ * Returns whether the domain was powered on, as opposed to already running or resumed.
+ */
+export function start(): boolean {
 	const current = state();
-	if (current == 'running') return;
-	if (current == 'paused') virsh(`Resuming ${name()}`, 'resume', name());
-	else virsh(`Starting ${name()}`, 'start', name());
+	if (current == 'running') return false;
+	if (current == 'paused') {
+		virsh(`Resuming ${name()}`, 'resume', name());
+		return false;
+	}
+	virsh(`Starting ${name()}`, 'start', name());
+	return true;
 }
 
 export interface StopOptions {
