@@ -1,17 +1,16 @@
-import { errorText } from 'ioium';
-import { once } from 'node:events';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { setTimeout } from 'node:timers/promises';
 import * as canvas from '../canvas/api.js';
-import { data } from './data.js';
 import { assertRunning } from './domain.js';
 import { press, typeText } from './io.js';
+import { HostServer } from './server.js';
 
 export interface CanvasLoginOptions {
 	type?: boolean;
 	focus?: boolean;
+	/** Seconds to wait for the guest to open the address */
 	timeout?: number;
+	/** Called with the address the guest needs to open, once it can be opened */
+	onListening?(url: string): void;
 }
 
 export async function loginToCanvas(path: string = '/', opts: CanvasLoginOptions = {}) {
@@ -20,40 +19,21 @@ export async function loginToCanvas(path: string = '/', opts: CanvasLoginOptions
 	if (!canvas.data.origin) throw new Error('Canvas is not set up, run `eedu discover canvas`');
 
 	const target = new URL(path, canvas.data.origin).href;
-
 	const served = Promise.withResolvers<void>();
 
-	const server = createServer(async (request, response) => {
-		if (request.method != 'GET' || new URL(request.url ?? '/', 'http://localhost').pathname != '/') {
-			response.writeHead(404).end();
-			return;
-		}
-
-		try {
+	await using server = await new HostServer()
+		.route('/canvas_login', async (request, response) => {
 			const { session_url } = await canvas.api<{ session_url: string }>(
 				'GET',
 				'login/session_token?return_to=' + encodeURIComponent(target)
 			);
 			response.writeHead(302, { Location: session_url, 'Cache-Control': 'no-store' }).end();
 			served.resolve();
-		} catch (error) {
-			response.writeHead(502, { 'Content-Type': 'text/plain' }).end(errorText(error));
-		}
-	});
+		})
+		.start();
 
-	server.listen(0, '127.0.0.1');
-	await once(server, 'listening');
-
-	const { port } = server.address() as AddressInfo;
-
-	using _ = {
-		[Symbol.dispose]() {
-			server.close();
-			server.closeAllConnections();
-		},
-	};
-
-	const url = `http://${data.hostAddress}:${port}`;
+	const url = server.url('/canvas_login');
+	opts.onListening?.(url);
 
 	if (opts.type) {
 		if (opts.focus) {

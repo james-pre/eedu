@@ -152,7 +152,13 @@ cli_qemu
 	.option('--no-focus', 'Type into whatever has focus instead of pressing Ctrl+L to select the address bar')
 	.option('-t, --timeout <seconds>', 'Give up if the VM has not opened the address by then', v => parseInt(v), 120)
 	.action(async (path, opts) => {
-		await io.track('Logging into Canvas on the VM', qemu.loginToCanvas(path, opts));
+		if (opts.type) {
+			await io.track('Logging into Canvas on the VM', qemu.loginToCanvas(path, opts));
+			return;
+		}
+
+		await qemu.loginToCanvas(path, { ...opts, onListening: url => console.log(`Open ${url} in the VM`) });
+		console.log('Logged into Canvas on the VM');
 	});
 
 const cli_auto = cli
