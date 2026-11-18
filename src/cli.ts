@@ -96,7 +96,7 @@ cli_courses
 				{ name: 'Category', text: c => c.name },
 				{ name: 'Weight', text: c => weightText(courseGrades.categories[c.name]), padStart: true },
 				{ name: 'Mode', text: c => c.mode },
-				{ name: 'Grade', text: c => range(c.mean, c.err), padStart: true },
+				{ name: 'Grade', text: c => range(c.mean * c.weight, c.err * c.weight), padStart: true },
 				{ name: 'Unknown', text: c => (c.unknowns ? `${c.unknowns}/${c.total}` : ''), padStart: true, grow: 0 },
 			],
 			{ formatHead: text => styleText('bold', text) },
@@ -381,13 +381,12 @@ cli_grades
 	.description('Show grades')
 	.addOption(allTermsOption)
 	.option('-l, --long', 'Show details for each category', false)
-	.option('-p, --predict', 'Predict category grades based on current score averages', false)
-	.option('-P, --predict-full-category', 'Predict scores for completely unknown categories using known ones (likely inaccurate)', false)
+	.option('-w, --weighted', "Also show each category's grade weighted by the category", false)
 	.option(
 		'--error-alignment <n>',
 		'Spaces used in place of a missing error percentage, may fix alignment on some terminals',
 		v => parseInt(v),
-		9
+		8
 	)
 	.argument('[course]', 'Course ID or name to show grades for, supports partial matches and is case insensitive')
 	.addHelpText(
@@ -424,7 +423,7 @@ function changesTable(changes: grades.GradeChange[]) {
 
 const gradeSources = [canvas.grades];
 
-const showDefaults: grades.ShowOptions = { long: true, predict: false, predictFullCategory: false, errorAlignment: 9 };
+const showDefaults: grades.ShowOptions = { long: true, weighted: false, errorAlignment: 8 };
 
 cli_grades
 	.command('pull')
@@ -591,8 +590,8 @@ cli_category
 		out('Mode', category.mode);
 		if (category.dropped) out('Dropped', category.dropped.toString());
 		if (category.expected !== undefined) out('Expected', category.expected.toString());
-		out('Grade', range(stats.mean, stats.err) + ' of the course');
-		if (category.weight) out('Unweighted', range(stats.mean / category.weight, stats.err / category.weight));
+		out('Grade', range(stats.mean * stats.weight, stats.err * stats.weight) + ' of the course');
+		if (category.weight) out('Unweighted', range(stats.mean, stats.err));
 		if (stats.unknowns) out('Unknown', `${stats.unknowns} of ${stats.total}`);
 
 		const rows = grades.categoryGrades(course, name);

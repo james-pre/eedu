@@ -89,10 +89,13 @@ export interface CategoryStats extends Omit<Category, 'weight'> {
 	name: string;
 	/** 0 when the category's weight isn't known */
 	weight: number;
+	/** Unweighted, counting unknown scores as half earned */
 	mean: number;
+	/** Unweighted */
 	err: number;
 	unknowns: number;
-	predicted: number;
+	/** Unweighted average of the known scores, undefined when there are none */
+	average?: number;
 	total: number;
 }
 
@@ -127,9 +130,9 @@ export function categoryStats(name: string, category: Category): CategoryStats {
 		...category,
 		name,
 		weight,
-		mean: possible ? (weight * (earned + unknownPossible / 2)) / possible : weight / 2,
-		err: possible ? (weight * unknownPossible) / 2 / possible : weight / 2,
-		predicted: knownPossible ? (weight * earned) / knownPossible : 0,
+		mean: possible ? (earned + unknownPossible / 2) / possible : 0.5,
+		err: possible ? unknownPossible / 2 / possible : 0.5,
+		average: knownPossible ? earned / knownPossible : undefined,
 		unknowns,
 		total: scores.length - dropCount,
 	};
@@ -139,9 +142,8 @@ export interface CourseStats {
 	categories: CategoryStats[];
 	grade: number;
 	err: number;
-	predicted: number;
-	predictedErr: number;
-	fullPrediction: number;
+	/** Weighted average of the categories with known scores, undefined when none have a weight */
+	current?: number;
 }
 
 export function courseStats(course: CourseGrades): CourseStats {
@@ -150,16 +152,13 @@ export function courseStats(course: CourseGrades): CourseStats {
 		.map(([name, category]) => categoryStats(name, category));
 	const sum = (value: (stats: CategoryStats) => number) => categories.reduce((total, stats) => total + value(stats), 0);
 
-	const predictedErr = sum(s => (s.predicted ? 0 : s.err));
-	const predicted = predictedErr + sum(s => s.predicted);
+	const gradedWeight = sum(s => (s.average === undefined ? 0 : s.weight));
 
 	return {
 		categories,
-		grade: sum(s => s.mean),
-		err: sum(s => s.err),
-		predicted,
-		predictedErr,
-		fullPrediction: sum(s => s.predicted || predicted * s.weight),
+		grade: sum(s => s.mean * s.weight),
+		err: sum(s => s.err * s.weight),
+		current: gradedWeight ? sum(s => (s.average ?? 0) * s.weight) / gradedWeight : undefined,
 	};
 }
 
@@ -608,8 +607,7 @@ export function courseGrades(course: string): CourseGrades {
 
 export interface ShowOptions {
 	long: boolean;
-	predict: boolean;
-	predictFullCategory: boolean;
+	weighted: boolean;
 	errorAlignment: number;
 }
 
@@ -635,31 +633,24 @@ export function show(name: string, course: CourseGrades, opt: ShowOptions) {
 	/** Percentage and percentage error */
 	const pce = (x: number, e: number, doFormat: boolean = false) => pc(x, doFormat ? format(x, e) : undefined) + pe(e);
 
-	const noPrediction = ' '.repeat(+opt.predict * 19);
+	/** Width of ` (100.0% average)`, for alignment */
+	const noAverage = ' '.repeat(17);
 
-	const { categories, grade, err, predicted, predictedErr, fullPrediction } = courseStats(course);
+	const { categories, grade, err, current } = courseStats(course);
 
 	console.log(styleText('bold', `--- ${name} ---`));
 
 	const out = (k: string, v?: string | false) => v && console.log(styleText('whiteBright', k + ':'), v);
 
-	out('Grade', pce(grade, err, true));
+	out('Grade', pce(grade, err, true) + (err && current !== undefined ? ` (${pc(current, format(current))})` : ''));
 
 	if (err) {
-		if (opt.predict) {
-			const full = pc(fullPrediction, 'magenta');
-			if (!predicted) out('Prediction', styleText('dim', 'Not available'));
-			else if (categories.some(s => s.unknowns != s.total && s.unknowns != 0))
-				out('Prediction', pce(predicted, predictedErr, true) + (opt.predictFullCategory ? ` (${full})` : ''));
-			else out('Prediction', full);
-		}
-
 		out('Minimum', pc(grade - err));
 		out('Maximum', pc(grade + err));
 	}
 
 	const variable = categories
-		.map(s => s.err && pc(s.err * 2) + ' ' + s.name)
+		.map(s => s.err * s.weight && pc(s.err * s.weight * 2) + ' ' + s.name)
 		.filter(x => x)
 		.join(', ');
 	if (variable) out('Variable', variable + '.');
@@ -669,22 +660,21 @@ export function show(name: string, course: CourseGrades, opt: ShowOptions) {
 	console.log(styleText('whiteBright', 'Categories:'));
 	const nameMax = Math.max(...categories.map(s => s.name.length)) + 1;
 	for (const s of categories) {
-		const predict = (isUnweighted: boolean = false) => {
-			if (!opt.predict || !s.unknowns) return noPrediction;
-			const prediction = (s.predicted || predicted * s.weight) / (isUnweighted ? s.weight : 1);
-			if (s.predicted) return ` (${pc(prediction, isUnweighted ? format(prediction) : undefined)} predicted)`;
-			if (opt.predictFullCategory) return ` (${pc(prediction, 'magenta')} predicted)`;
-			return noPrediction;
+		const average = (weight: number = 1, doFormat: boolean = false) => {
+			if (!s.unknowns || s.average === undefined) return noAverage;
+			const value = s.average * weight;
+			return ` (${pc(value, doFormat ? format(value) : undefined)} average)`;
 		};
 
 		console.log(
 			[
-				`    ${styleText('whiteBright', (s.name + ':').padEnd(nameMax))} ${pce(s.mean, s.err)}` + predict(),
-				!!s.weight && `unweighted ${pce(s.mean / s.weight, s.err / s.weight, true)}` + predict(true),
+				`    ${styleText('whiteBright', (s.name + ':').padEnd(nameMax))} ${pce(s.mean, s.err, true)}` + average(1, true),
+				opt.weighted && !!s.weight && `weighted ${pce(s.mean * s.weight, s.err * s.weight)}` + average(s.weight),
 				s.unknowns && `${s.unknowns} unknown score${s.unknowns != 1 ? 's' : ''}`,
 			]
 				.filter(x => x)
 				.join(', ')
+				.trimEnd()
 		);
 	}
 }
