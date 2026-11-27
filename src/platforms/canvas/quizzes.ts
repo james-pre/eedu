@@ -1,4 +1,5 @@
 import $pkg from '../../../package.json' with { type: 'json' };
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { Course } from '../../data.js';
 import { api, data } from './api.js';
 import { putRecords, type KinesisConfiguration } from './kinesis.js';
@@ -35,6 +36,8 @@ export interface QuizSession {
 	start_at: string | null;
 	end_at: string | null;
 	attempt: number;
+	/** How many questions the attempt has, which quiz-api reports before the questions themselves are ready */
+	session_items_count: number;
 	accepted_student_access_code: boolean;
 	account_uuid: string;
 	root_account_uuid: string;
@@ -180,6 +183,17 @@ async function quizApi<T>(quiz: Pick<OpenQuiz, 'api'>, method: string, endpoint:
 /** Statuses of an attempt that has been turned in */
 const finished = ['submitted', 'needs_grading', 'graded', 'complete', 'completed'];
 
+/** Get an attempt's questions, waiting for quiz-api to add them to an attempt that was just started */
+async function sessionItems(quiz: Pick<OpenQuiz, 'api'>, session: QuizSession, timeout: number = 30_000): Promise<SessionItem[]> {
+	const deadline = Date.now() + timeout;
+	for (;;) {
+		const items = await quizApi<SessionItem[]>(quiz, 'GET', `/quiz_sessions/${session.id}/session_items`);
+		if (items.length || !session.session_items_count) return items;
+		if (Date.now() > deadline) throw new QuizError("The quiz's questions did not load in time, try opening it again");
+		await sleep(1000);
+	}
+}
+
 /** Wrong access codes tried before giving up, since quiz-api throttles them */
 const accessCodeAttempts = 3;
 
@@ -247,7 +261,7 @@ export async function open(course: Course, assignment: string, options: OpenOpti
 	const id = taking.quiz_api_quiz_session_id;
 
 	const session = await quizApi<QuizSession>(taken, 'POST', `/quiz_sessions/${id}/take`, {});
-	const items = await quizApi<SessionItem[]>(taken, 'GET', `/quiz_sessions/${id}/session_items`);
+	const items = await sessionItems(taken, session);
 	const saved = await quizApi<ResumeData[]>(taken, 'GET', `/quiz_sessions/${id}/session_item_responses/resume_data`);
 	const { ip } = await quizApi<{ ip: string | null }>(taken, 'GET', `/quiz_sessions/${id}/get_ip_address`).catch(() => ({ ip: null }));
 

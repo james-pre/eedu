@@ -101,6 +101,7 @@ export function quizText(quiz: OpenQuiz, options: QuizTextOptions = {}): string 
 		options.instructions !== false && session.quiz.instructions ? htmlToText(session.quiz.instructions).trim() : '',
 		'',
 		...quiz.items.map(item => itemText(item, quiz.responses.get(item.position))),
+		!quiz.items.length && 'The attempt has no questions.',
 	];
 	return lines.filter(line => typeof line == 'string').join('\n');
 }
